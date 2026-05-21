@@ -13,6 +13,8 @@
 <title>My Calendar</title>
 <!-- Tesseract.js — free in-browser OCR, no API key, no server -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<!-- Chrono — free natural language date parser, no API key -->
+<script src="https://cdn.jsdelivr.net/npm/chrono-node@2/dist/chrono.min.js"></script>
 <style>
 /* ── Reset & Variables ── */
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -279,6 +281,13 @@ body.has-wallpaper .ag-date{
 .fg-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .toggle-row{display:flex;align-items:center;gap:10px;cursor:pointer;padding:4px 0}
 .toggle-row input{cursor:pointer}
+.smart-row{display:flex;gap:8px}
+.smart-row input{flex:1}
+.smart-btn{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:0 16px;font-size:.9rem;font-weight:600;cursor:pointer;flex-shrink:0;touch-action:manipulation}
+.smart-hint{font-size:.75rem;margin-top:5px;min-height:1.1em;font-weight:500}
+.smart-hint.ok{color:var(--accent)}
+.smart-hint.err{color:#e57373}
+#smart-wrap{border-bottom:1.5px solid var(--border);padding-bottom:16px;margin-bottom:4px}
 
 /* ── Category picker ── */
 .cat-pills{display:flex;flex-wrap:wrap;gap:7px}
@@ -606,6 +615,16 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
     <button class="sheet-close" id="event-close">✕</button>
   </div>
   <div class="sheet-body">
+    <div id="smart-wrap">
+      <div class="fg" style="margin-bottom:6px">
+        <label>Quick Add <span style="text-transform:none;font-weight:400;opacity:.55">— type it naturally</span></label>
+        <div class="smart-row">
+          <input type="text" id="f-smart" placeholder='e.g. "drinks Friday 8pm" or "dentist tomorrow"' autocomplete="off">
+          <button type="button" class="smart-btn" id="f-smart-btn">→</button>
+        </div>
+        <div class="smart-hint" id="f-smart-hint"></div>
+      </div>
+    </div>
     <div class="fg">
       <label>Event Title</label>
       <input type="text" id="f-title" placeholder="e.g. Team meeting, Gym session…" autocomplete="off">
@@ -1440,9 +1459,54 @@ function openEventForm(id, prefDate, prefTime, prefill) {
   reminderType = p.reminder || 'none';
   document.querySelectorAll('#f-reminder-pills .repeat-pill').forEach(x=>
     x.classList.toggle('sel', x.dataset.reminder===reminderType));
+  // Smart input: show only for new events, clear it
+  const smartWrap=document.getElementById('smart-wrap');
+  smartWrap.style.display=id?'none':'';
+  document.getElementById('f-smart').value='';
+  document.getElementById('f-smart-hint').textContent='';
+  document.getElementById('f-smart-hint').className='smart-hint';
   openSheet('event-sheet');
-  setTimeout(()=>document.getElementById('f-title').focus(),200);
+  setTimeout(()=>{
+    if(!id) document.getElementById('f-smart').focus();
+    else document.getElementById('f-title').focus();
+  },200);
 }
+
+function parseSmartInput(){
+  const text=document.getElementById('f-smart').value.trim();
+  const hint=document.getElementById('f-smart-hint');
+  if(!text) return;
+  const results=chrono.parse(text,new Date(),{forwardDate:true});
+  if(!results.length){
+    hint.textContent="Couldn't find a date — try 'Friday 8pm' or 'tomorrow 3pm'";
+    hint.className='smart-hint err';
+    return;
+  }
+  const r=results[0];
+  const date=r.start.date();
+  const title=text.replace(r.text,'').trim().replace(/^[\s,]+|[\s,]+$/g,'');
+  document.getElementById('f-title').value=title;
+  document.getElementById('f-date').value=fmt(date);
+  if(title) autoCategorize(title);
+  const hasTime=r.start.isCertain('hour');
+  if(hasTime){
+    document.getElementById('f-allday').checked=false;
+    document.getElementById('f-time-wrap').style.display='';
+    const h=String(date.getHours()).padStart(2,'0');
+    const m=String(date.getMinutes()).padStart(2,'0');
+    document.getElementById('f-start').value=h+':'+m;
+    const end=new Date(date.getTime()+60*60*1000);
+    document.getElementById('f-end').value=String(end.getHours()).padStart(2,'0')+':'+String(end.getMinutes()).padStart(2,'0');
+  }
+  const label=date.toLocaleDateString('default',{weekday:'short',month:'short',day:'numeric'})
+    +(hasTime?' at '+date.toLocaleTimeString('default',{hour:'numeric',minute:'2-digit'}):'');
+  hint.textContent='✓ '+label;
+  hint.className='smart-hint ok';
+}
+document.getElementById('f-smart').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();parseSmartInput();}
+});
+document.getElementById('f-smart-btn').addEventListener('click',parseSmartInput);
 
 function setCategory(cat) {
   document.querySelectorAll('.cat-pill').forEach(p=>{
