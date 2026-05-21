@@ -1760,7 +1760,7 @@ document.getElementById('photo-error-manual-btn').addEventListener('click',()=>{
 document.getElementById('photo-create-btn').addEventListener('click',()=>{
   const text=document.getElementById('ocr-text-area').value.trim();
   if(!text){ showToast('No text to parse — try a clearer photo'); return; }
-  const parsed=parseOCRText(text);
+  const parsed=enhanceWithChrono(parseOCRText(text), text);
   closeSheet();
   openEventForm(null,null,null,parsed);
 });
@@ -1817,14 +1817,18 @@ async function handlePhotoFile(file) {
     const text = await runOCR(processedDataUrl);
     const trimmed = text.trim();
 
-    // Try schedule parsing first — if 2+ shifts detected, go to bulk import UI
+    // Multi-event detection: "day HH:MM-HH:MM & day HH:MM-HH:MM" (e.g. WhatsApp messages)
+    const multiEvents = parseMultiDayTimePattern(trimmed);
+    // Schedule parsing: shift rosters with 2+ time-range lines
     const shifts = parseShiftSchedule(trimmed);
-    if (shifts.length >= 2) {
+    if (multiEvents.length >= 2) {
+      showScheduleSteps(multiEvents);
+    } else if (shifts.length >= 2) {
       showScheduleSteps(shifts);
     } else {
-      // Single-event flow (original behaviour)
+      // Single-event flow — parse then run Chrono correction pass
       document.getElementById('ocr-text-area').value = trimmed;
-      const preview = parseOCRText(trimmed);
+      const preview = enhanceWithChrono(parseOCRText(trimmed), trimmed);
       const parts = [];
       if (preview.date)      parts.push('📅 ' + fmtShortDate(preview.date));
       if (!preview.allDay)   parts.push('🕐 ' + preview.startTime + (preview.endTime ? ' – ' + preview.endTime : ''));
@@ -2280,15 +2284,15 @@ function parseOCRText(raw) {
   const halfM = text.match(/\bhalf\s+(\d{1,2})\b/i);
   if (halfM) { const n=parseInt(halfM[1]); setT(String((n-1+24)%24).padStart(2,'0')+':30', String(n).padStart(2,'0')+':30', 'Dutch half'); }
 
-  // 2 — Dot-format range: "19.00-20.30"
+  // 2 — Dot-format range: "19.00-20.30" (hour ≥ 5 to skip score/level numbers like 4.25-5.25)
   if (!startTime) {
-    const dr = text.match(/\b(\d{1,2})\.(\d{2})\s*-\s*(\d{1,2})\.(\d{2})\b/);
+    const dr = text.match(/\b([5-9]|[01]\d|2[0-3])\.([0-5]\d)\s*-\s*([5-9]|[01]\d|2[0-3])\.([0-5]\d)\b/);
     if (dr) setT(`${dr[1].padStart(2,'0')}:${dr[2]}`, `${dr[3].padStart(2,'0')}:${dr[4]}`, 'dot range');
   }
 
-  // 3 — Dot-format single times: "19.00", "08.30"
+  // 3 — Dot-format single times: "19.00", "08.30" (hour ≥ 5 to skip price decimals)
   if (!startTime) {
-    const dots=[], dotRx=/\b([01]?\d|2[0-3])\.([0-5]\d)\b(?!\.\d)/g; let dm;
+    const dots=[], dotRx=/\b([5-9]|[01]\d|2[0-3])\.([0-5]\d)\b(?!\.\d)/g; let dm;
     while ((dm=dotRx.exec(text))!==null) dots.push(`${dm[1].padStart(2,'0')}:${dm[2]}`);
     if (dots.length) setT(dots[0], dots[1]||plusHour(dots[0]), 'dot times');
   }
@@ -2474,6 +2478,46 @@ navigator.serviceWorker?.addEventListener('message',e=>{
 if('Notification' in window && Notification.permission==='granted') scheduleReminders();
 
 // ━━━ FAB ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Runs Chrono over OCR-parsed result and overrides date/time if Chrono finds something better.
+// Handles formats like "Saturday, 23 May 14:30 - 16:00" that the custom regex misses or garbles.
+function enhanceWithChrono(parsed, rawText) {
+  if (typeof chrono === 'undefined') return parsed;
+  const cr = chrono.parse(rawText, new Date(), { forwardDate: true });
+  if (!cr.length) return parsed;
+  const r = cr[0]; const d = r.start.date();
+  if (r.start.isCertain('hour')) {
+    parsed.date = fmt(d);
+    parsed.allDay = false;
+    parsed.startTime = String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+    if (r.end) {
+      const ed = r.end.date();
+      parsed.endTime = String(ed.getHours()).padStart(2,'0')+':'+String(ed.getMinutes()).padStart(2,'0');
+    } else if (!parsed.endTime) {
+      const [h,m]=parsed.startTime.split(':').map(Number);
+      parsed.endTime = String((h+1)%24).padStart(2,'0')+':'+String(m).padStart(2,'0');
+    }
+  } else if (!parsed.date || parsed.date === fmt(today)) {
+    parsed.date = fmt(d);
+  }
+  return parsed;
+}
+
+// Detects multiple "day HH:MM-HH:MM" pairs in a single photo (e.g. a WhatsApp message listing two events).
+// Returns an array of event objects if 2+ pairs found; empty array otherwise.
+function parseMultiDayTimePattern(text) {
+  const cleaned = cleanOCRText(text);
+  const rx = new RegExp('(' + DAY_KEYS.join('|') + ')\\s+(\\d{1,2}:\\d{2})\\s*[-–]\\s*(\\d{1,2}:\\d{2})', 'gi');
+  const matches = [...cleaned.matchAll(rx)];
+  if (matches.length < 2) return [];
+  return matches.map(m => {
+    const idx = DAY_LOOKUP[m[1].toLowerCase()];
+    const d = new Date(today); let diff = idx - d.getDay(); if (diff <= 0) diff += 7;
+    d.setDate(d.getDate() + diff);
+    const dayName = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+    return { title: dayName, date: fmt(d), endDate: null, allDay: false, startTime: m[2], endTime: m[3], category: 'other', location: null, notes: null };
+  });
+}
+
 // ━━━ Dutch shift schedule parser ━━━━━━━━━━━━━━━━━━━━━━
 // Parses OCR text from a shift schedule app (e.g. Mijn shifts / De Gracht Vast).
 // Returns an array of event objects — one per detected shift.
