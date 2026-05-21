@@ -2234,18 +2234,20 @@ function parseOCRText(raw) {
     // European dot/dash: 15.05.2026  or  15-05-2026
     { label:'EU DD.MM',   rx:/\b(\d{1,2})[.\-](\d{1,2})[.\-](\d{4})\b/,
       fn: m => `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}` },
-    // Written, month first: May 15 / Mei 15 / May 15th, 2026
-    { label:'Month DD',
-      rx: new RegExp('\\b(' + Object.keys(MONTHS).sort((a,b)=>b.length-a.length).join('|') + ')[a-z]*\\.?\\s+(\\d{1,2})(?:st|nd|rd|th|e|de)?(?:[,\\s]+(\\d{4}))?\\b', 'i'),
-      fn: m => { const mo=MONTHS[m[1].toLowerCase()];
-        const yr=m[3]?parseInt(m[3]):today.getFullYear();
-        return `${yr}-${String(mo).padStart(2,'0')}-${String(parseInt(m[2])).padStart(2,'0')}`; } },
-    // Written, day first: 15 May / 15 mei / 15th May 2026
+    // Written, day first: 15 May / 15 mei / 15th May 2026 — checked BEFORE Month DD
+    // so "23 May 14:30" matches "23 May" and not "May 14" from the time
     { label:'DD Month',
       rx: new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th|e|de)?\\s+(' + Object.keys(MONTHS).sort((a,b)=>b.length-a.length).join('|') + ')[a-z]*\\.?(?:[,\\s]+(\\d{4}))?\\b', 'i'),
       fn: m => { const mo=MONTHS[m[2].toLowerCase()];
         const yr=m[3]?parseInt(m[3]):today.getFullYear();
         return `${yr}-${String(mo).padStart(2,'0')}-${String(parseInt(m[1])).padStart(2,'0')}`; } },
+    // Written, month first: May 15 / Mei 15 / May 15th, 2026
+    // (?!:) prevents matching the hour from a time like "May 14:30"
+    { label:'Month DD',
+      rx: new RegExp('\\b(' + Object.keys(MONTHS).sort((a,b)=>b.length-a.length).join('|') + ')[a-z]*\\.?\\s+(\\d{1,2})(?!:)(?:st|nd|rd|th|e|de)?(?:[,\\s]+(\\d{4}))?\\b', 'i'),
+      fn: m => { const mo=MONTHS[m[1].toLowerCase()];
+        const yr=m[3]?parseInt(m[3]):today.getFullYear();
+        return `${yr}-${String(mo).padStart(2,'0')}-${String(parseInt(m[2])).padStart(2,'0')}`; } },
     // Day name only: Tuesday / vrijdag / vr — resolves to upcoming occurrence
     { label:'Day name', rx: DAY_RX,
       fn: () => { const m=text.match(DAY_RX); const idx=DAY_LOOKUP[m[1].toLowerCase()];
