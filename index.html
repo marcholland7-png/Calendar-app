@@ -2480,20 +2480,18 @@ navigator.serviceWorker?.addEventListener('message',e=>{
 if('Notification' in window && Notification.permission==='granted') scheduleReminders();
 
 // ━━━ FAB ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Runs Chrono over OCR-parsed result and fills in time, and date only when needed.
+// Runs Chrono over OCR-parsed result.
+// Chrono fills in TIME (reliable), and DATE only when our regex found nothing.
+// Chrono never overrides a date our regex already found — it misreads formats
+// like "23 May 14:30" as "May 14" (treating the hour as the day).
 function enhanceWithChrono(parsed, rawText) {
   if (typeof chrono === 'undefined') return parsed;
   const cr = chrono.parse(rawText, new Date(), { forwardDate: true });
   if (!cr.length) return parsed;
   const r = cr[0]; const d = r.start.date();
+  const noDateYet = !parsed.date || parsed.date === fmt(today);
   if (r.start.isCertain('hour')) {
-    // Only override the date if Chrono explicitly found one AND our parser didn't.
-    // isCertain('day') means Chrono read an actual date from the text (not just inferred today).
-    // This prevents Chrono from stomping a correct date our regex already found.
-    const ourParserFoundDate = parsed.date && parsed.date !== fmt(today);
-    if (!ourParserFoundDate || r.start.isCertain('day')) {
-      parsed.date = fmt(d);
-    }
+    if (noDateYet) parsed.date = fmt(d);
     parsed.allDay = false;
     parsed.startTime = String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
     if (r.end) {
@@ -2503,7 +2501,7 @@ function enhanceWithChrono(parsed, rawText) {
       const [h,m]=parsed.startTime.split(':').map(Number);
       parsed.endTime = String((h+1)%24).padStart(2,'0')+':'+String(m).padStart(2,'0');
     }
-  } else if (!parsed.date || parsed.date === fmt(today)) {
+  } else if (noDateYet) {
     parsed.date = fmt(d);
   }
   return parsed;
