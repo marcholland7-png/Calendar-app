@@ -2266,6 +2266,29 @@ function parseOCRText(raw) {
       } catch(e) {}
     }
   }
+
+  // ── Day-name cross-validation ────────────────────────────────────────────
+  // If a full/3-letter day name (e.g. "Saturday", "sat") is in the text, verify
+  // the extracted date actually falls on that day of the week.
+  // If it doesn't, the numeric date is wrong (classic OCR misread: "14" grabbed
+  // from "14:30" instead of the real day "23"). Correct it using the day name.
+  if (foundDate && !['today','tomorrow','next weekday','Day name'].includes(dateLabel)) {
+    const dayMatch = text.match(DAY_RX);
+    if (dayMatch && dayMatch[1].length >= 3) {
+      const expectedDow = DAY_LOOKUP[dayMatch[1].toLowerCase()];
+      const parsedDow   = parseDate(foundDate).getDay();
+      if (expectedDow !== undefined && expectedDow !== parsedDow) {
+        const corrected = new Date(today);
+        let diff = expectedDow - corrected.getDay();
+        if (diff <= 0) diff += 7;
+        corrected.setDate(corrected.getDate() + diff);
+        foundDate  = fmt(corrected);
+        dateLabel  = 'Day name (corrected)';
+        console.log(`[Parse] Day-name mismatch — expected DOW ${expectedDow}, got ${parsedDow}. Corrected to ${foundDate}`);
+      }
+    }
+  }
+
   // If no 4-digit year in the text and the parsed date is >7 days in the past,
   // assume the event is next year — most scanned photos are for future appointments
   if (foundDate && !['today','tomorrow','next weekday'].includes(dateLabel) && !/\b20\d{2}\b/.test(text)) {
