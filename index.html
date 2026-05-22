@@ -2853,7 +2853,7 @@ async function pushSync(){
     const ts=new Date().toISOString();
     const res=await fetch(syncUrl()+'/rest/v1/sync',{
       method:'POST', headers:syncHeaders(),
-      body:JSON.stringify({code:syncCode(),events:events.filter(e=>!e.private),todos,updated_at:ts}),
+      body:JSON.stringify({code:syncCode(),events:[...events.filter(e=>!e.private),...Object.values(icsCache).flat()],todos,updated_at:ts}),
     });
     if(res.ok) localStorage.setItem('mycal_sync_ts',ts);
   }catch(e){}
@@ -2869,7 +2869,7 @@ async function pullSync(){
     if(!res.ok){syncInProgress=false;return false;}
     const rows=await res.json();
     if(rows.length&&rows[0].updated_at>syncTs()){
-      events=rows[0].events||[];
+      events=(rows[0].events||[]).filter(e=>!e._icsId);
       todos=rows[0].todos||[];
       localStorage.setItem(STORAGE_KEY,JSON.stringify(events));
       localStorage.setItem('mycal_todos_v1',JSON.stringify(todos));
@@ -2936,7 +2936,7 @@ document.getElementById('sync-connect-btn').addEventListener('click',async()=>{
     if(syncMode==='existing'){
       const rows=await res.json();
       if(rows.length){
-        events=rows[0].events||[];
+        events=(rows[0].events||[]).filter(e=>!e._icsId);
         todos=rows[0].todos||[];
         localStorage.setItem(STORAGE_KEY,JSON.stringify(events));
         localStorage.setItem('mycal_todos_v1',JSON.stringify(todos));

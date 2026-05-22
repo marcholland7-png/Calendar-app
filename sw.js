@@ -1,6 +1,6 @@
 // Bump this string whenever you deploy a code change.
 // It deletes all old caches and forces every client to load fresh files.
-const CACHE = 'calendar-app-v5';
+const CACHE = 'calendar-app-v6';
 
 const STATIC = ['./manifest.json', './icon.svg'];
 
