@@ -913,6 +913,35 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
       </div>
       <button class="btn btn-ghost" id="cat-add-btn" style="width:100%;margin-top:10px">+ Add Category</button>
     </div>
+    <div class="settings-section" id="ics-section">
+      <h3>Import Calendar</h3>
+      <p class="settings-note" style="margin-bottom:10px">Sync from Google, Apple, or Outlook. Events from your other calendar app will appear here automatically.</p>
+      <div id="ics-feeds-list"></div>
+      <div id="add-ics-form" style="display:none;margin-top:12px">
+        <div class="fg">
+          <label>Name <span style="text-transform:none;font-weight:400">(e.g. My Google Calendar)</span></label>
+          <input type="text" id="ics-name-inp" placeholder="Google Calendar" autocomplete="off">
+        </div>
+        <div class="fg">
+          <label>Calendar URL</label>
+          <input type="url" id="ics-url-inp" placeholder="Paste your iCal / ICS link here" autocomplete="off" style="font-size:.78rem;font-family:monospace">
+        </div>
+        <div class="fg" style="display:flex;align-items:center;gap:12px">
+          <label style="margin:0;flex-shrink:0">Colour</label>
+          <input type="color" id="ics-color-inp" value="#1a73e8" style="width:48px;height:36px;border:none;border-radius:8px;cursor:pointer;padding:2px;background:transparent">
+          <span id="ics-color-preview" style="flex:1;height:36px;border-radius:8px;background:#1a73e8;transition:background .1s"></span>
+        </div>
+        <div class="settings-note" id="ics-help" style="margin:8px 0 14px;line-height:1.6">
+          <strong>Google:</strong> calendar.google.com → Settings → [your calendar] → scroll to "Secret address in iCal format" → copy link<br>
+          <strong>Apple:</strong> Calendar app → right-click calendar → Share → enable Public Calendar → copy link (change webcal:// to https://)
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" id="ics-add-confirm-btn" style="flex:1">Import</button>
+          <button class="btn btn-ghost" id="ics-add-cancel-btn" style="flex:1">Cancel</button>
+        </div>
+      </div>
+      <button class="btn btn-ghost" id="ics-add-btn" style="width:100%;margin-top:10px">+ Add Calendar Import</button>
+    </div>
     <div class="settings-section">
       <h3>Wallpaper</h3>
       <button class="btn btn-ghost" id="wallpaper-btn" style="width:100%;margin-bottom:8px">Set Wallpaper Photo</button>
@@ -1229,8 +1258,8 @@ function renderMonth(container) {
     const dn=el('div','dn'); dn.textContent=d.getDate(); cell.appendChild(dn);
     const evs=allEventsForDate(d);
     evs.slice(0,3).forEach(ev=>{
-      const isFriend=!!ev._friendId;
-      const color=isFriend?ev._friendColor:(CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
+      const color=evColor(ev);
+      const ro=evReadOnly(ev);
       const chip=el('div','chip chip-single');
       chip.style.cssText=`background:${color}18;color:${color};border-left-color:${color}`;
       const txt=el('span','chip-txt');
@@ -1241,9 +1270,10 @@ function renderMonth(container) {
         time.textContent=ev.startTime;
         chip.appendChild(time);
       }
-      if(isFriend){
+      if(ro){
+        const badge=evBadge(ev);
         const dot=el('span','');
-        dot.textContent=ev._friendName[0].toUpperCase();
+        dot.textContent=badge[0].toUpperCase();
         dot.style.cssText=`background:${color};color:#fff;border-radius:50%;width:14px;height:14px;font-size:9px;line-height:14px;text-align:center;display:inline-block;margin-left:3px;flex-shrink:0`;
         chip.appendChild(dot);
         chip.addEventListener('pointerdown',e=>e.stopPropagation());
@@ -1294,9 +1324,8 @@ function openDaySheet(d) {
     body.innerHTML='<div class="empty" style="padding:30px 0"><div class="e-icon">📅</div><p>No events — tap below to add one</p></div>';
   } else {
     evs.forEach(ev=>{
-      const isFriend=!!ev._friendId;
-      const color=isFriend?ev._friendColor:(CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
-      const row=el('div','ag-ev'); row.style.cursor=isFriend?'default':'pointer';
+      const color=evColor(ev); const ro=evReadOnly(ev);
+      const row=el('div','ag-ev'); row.style.cursor=ro?'default':'pointer';
       const bar=el('div','ag-bar'); bar.style.background=color;
       const info=el('div','ag-info');
       const title=el('div','ag-title'); title.textContent=(ev.private?'🔒 ':'')+ev.title;
@@ -1308,9 +1337,9 @@ function openDaySheet(d) {
       if(ev.notes){const n=el('div','ag-notes');n.textContent=ev.notes;info.appendChild(n);}
       const badge=el('div','ag-badge');
       badge.style.cssText=`background:${color}22;color:${color}`;
-      badge.textContent=isFriend?ev._friendName:(CAT[ev.category]||{label:ev.category||'Other'}).label;
+      badge.textContent=evBadge(ev);
       row.appendChild(bar); row.appendChild(info); row.appendChild(badge);
-      if(!isFriend) row.addEventListener('click',()=>{ closeSheet(); openEventForm(ev.id); });
+      if(!ro) row.addEventListener('click',()=>{ closeSheet(); openEventForm(ev.id); });
       body.appendChild(row);
     });
   }
@@ -1423,22 +1452,22 @@ function renderWeek(container) {
       col.appendChild(s);
     }
     allEventsForDate(d).filter(ev=>!ev.allDay&&ev.startTime).forEach(ev=>{
-      const isFriend=!!ev._friendId;
+      const ro=evReadOnly(ev);
       const [sh,sm]=(ev.startTime||'00:00').split(':').map(Number);
       let [eh,em]=(ev.endTime||ev.startTime).split(':').map(Number);
       let startTotal=sh+sm/60, endTotal=eh+em/60;
       if(endTotal<=startTotal) endTotal+=24;
       const top=startTotal*48;
       const h=Math.max(Math.min(endTotal,24)-startTotal,0.5)*48;
-      const color=isFriend?ev._friendColor:(CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
+      const color=evColor(ev);
       const e=el('div','wk-ev');
       e.style.cssText=`top:${top}px;height:${h}px;background:${color}`;
       const timeSpan=el('span','ev-time'); timeSpan.textContent=ev.startTime+(ev.endTime?' – '+ev.endTime:'');
-      const titleSpan=el('span','ev-title'); titleSpan.textContent=(ev.private?'🔒 ':'')+ev.title+(isFriend?` (${ev._friendName})`:'');
+      const titleSpan=el('span','ev-title'); titleSpan.textContent=(ev.private?'🔒 ':'')+ev.title+(ro?` (${evBadge(ev)})`:'');
       e.appendChild(timeSpan); e.appendChild(titleSpan);
-      if(isFriend){
+      if(ro){
         e.style.opacity='0.85';
-        e.addEventListener('click',ev2=>{ev2.stopPropagation();showToast(`${ev._friendName}: ${ev.title}`);});
+        e.addEventListener('click',ev2=>{ev2.stopPropagation();showToast(`${evBadge(ev)}: ${ev.title}`);});
       } else {
         e.addEventListener('click',ev2=>{ev2.stopPropagation();openEventForm(ev.id);});
       }
@@ -1484,8 +1513,7 @@ function renderAgenda(container) {
       grp.appendChild(empty);
     } else {
       evs.forEach(ev=>{
-        const isFriend=!!ev._friendId;
-        const color=isFriend?ev._friendColor:(CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
+        const color=evColor(ev); const ro=evReadOnly(ev);
         const row=el('div','ag-ev');
         const bar=el('div','ag-bar'); bar.style.background=color;
         const info=el('div','ag-info');
@@ -1498,9 +1526,9 @@ function renderAgenda(container) {
         if(ev.notes){const n=el('div','ag-notes');n.textContent=ev.notes;info.appendChild(n);}
         const badge=el('div','ag-badge');
         badge.style.cssText=`background:${color}22;color:${color}`;
-        badge.textContent=isFriend?ev._friendName:(CAT[ev.category]||{label:ev.category||'Other'}).label;
+        badge.textContent=evBadge(ev);
         row.appendChild(bar); row.appendChild(info); row.appendChild(badge);
-        if(isFriend){ row.style.opacity='0.85'; } else { row.addEventListener('click',()=>openEventForm(ev.id)); }
+        if(ro){ row.style.opacity='0.85'; } else { row.addEventListener('click',()=>openEventForm(ev.id)); }
         grp.appendChild(row);
       });
     }
@@ -2996,12 +3024,24 @@ function allEventsForDate(d){
     const f=friends.find(x=>x.id===ev._friendId);
     return f&&(f.view||'merged')==='merged';
   });
-  return [...own,...fr].sort((a,b)=>(a.startTime||'00:00')>(b.startTime||'00:00')?1:-1);
+  const ics=icsEventsForDate(d);
+  return [...own,...fr,...ics].sort((a,b)=>(a.startTime||'00:00')>(b.startTime||'00:00')?1:-1);
 }
 
 function friendChipColor(ev){
   return ev._friendColor||'#999';
 }
+function evColor(ev){
+  if(ev._friendId) return ev._friendColor;
+  if(ev._icsId)    return ev._icsColor||'#1a73e8';
+  return (CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
+}
+function evBadge(ev){
+  if(ev._friendId) return ev._friendName;
+  if(ev._icsId)    return ev._icsName||'Import';
+  return (CAT[ev.category]||{label:ev.category||'Other'}).label;
+}
+function evReadOnly(ev){ return !!(ev._friendId||ev._icsId); }
 document.getElementById('sync-sheet-close').addEventListener('click',closeSheet);
 document.getElementById('settings-sync-btn').addEventListener('click',openSyncSheet);
 
@@ -3248,6 +3288,188 @@ document.getElementById('cat-add-confirm-btn').addEventListener('click',()=>{
   showToast('Category added','success');
 });
 
+// ━━━ ICS Calendar Import ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const ICS_FEEDS_KEY  = 'mycal_ics_feeds_v1';
+const ICS_CACHE_KEY  = 'mycal_ics_cache_v1';
+let icsFeeds = JSON.parse(localStorage.getItem(ICS_FEEDS_KEY) || '[]');
+let icsCache = JSON.parse(localStorage.getItem(ICS_CACHE_KEY) || '{}');
+const CORS_PROXY = 'https://corsproxy.io/?';
+
+function saveIcsFeeds(){ localStorage.setItem(ICS_FEEDS_KEY, JSON.stringify(icsFeeds)); }
+function saveIcsCache(){ localStorage.setItem(ICS_CACHE_KEY, JSON.stringify(icsCache)); }
+
+function icsEventsForDate(d){
+  const all=[];
+  Object.values(icsCache).forEach(evs=>{
+    evs.filter(ev=>eventSpansDate(ev,d)).forEach(ev=>all.push(ev));
+  });
+  return all;
+}
+
+function parseICS(text){
+  text=text.replace(/\r\n[ \t]/g,'').replace(/\r/g,'');
+  const lines=text.split('\n');
+  const evs=[]; let cur=null;
+  for(const raw of lines){
+    const line=raw.trim();
+    if(line==='BEGIN:VEVENT'){cur={};continue;}
+    if(line==='END:VEVENT'){if(cur)evs.push(cur);cur=null;continue;}
+    if(!cur) continue;
+    const ci=line.indexOf(':'); if(ci===-1) continue;
+    const propFull=line.substring(0,ci);
+    const val=line.substring(ci+1).replace(/\\n/g,' ').replace(/\\,/g,',').replace(/\\;/g,';').replace(/\\\\/g,'\\');
+    const si=propFull.indexOf(';');
+    const prop=si===-1?propFull:propFull.substring(0,si);
+    const params=si===-1?'':propFull.substring(si+1).toUpperCase();
+    if(prop==='UID') cur.uid=val;
+    else if(prop==='SUMMARY') cur.summary=val;
+    else if(prop==='LOCATION') cur.location=val;
+    else if(prop==='DESCRIPTION') cur.description=val.replace(/<[^>]+>/g,'').trim();
+    else if(prop==='STATUS'&&val==='CANCELLED') cur.cancelled=true;
+    else if(prop==='DTSTART'){
+      cur.allDay=params.includes('VALUE=DATE')||(val.length===8&&!val.includes('T'));
+      cur.dtstart=val;
+    }
+    else if(prop==='DTEND') cur.dtend=val;
+  }
+  return evs;
+}
+
+function parseICSDate(str){
+  if(!str) return null;
+  const utc=str.endsWith('Z');
+  const s=str.replace('Z','');
+  const y=+s.slice(0,4),mo=+s.slice(4,6)-1,d=+s.slice(6,8);
+  if(s.length===8) return new Date(y,mo,d);
+  const h=+s.slice(9,11),mi=+s.slice(11,13);
+  return utc?new Date(Date.UTC(y,mo,d,h,mi)):new Date(y,mo,d,h,mi);
+}
+
+function icsToLocal(rawEvs, feedId, feedName, feedColor){
+  return rawEvs.filter(e=>e.uid&&e.dtstart&&e.summary&&!e.cancelled).map(e=>{
+    const start=parseICSDate(e.dtstart);
+    const end=e.dtend?parseICSDate(e.dtend):null;
+    if(!start) return null;
+    const allDay=!!e.allDay;
+    let startTime=null,endTime=null;
+    if(!allDay){
+      startTime=String(start.getHours()).padStart(2,'0')+':'+String(start.getMinutes()).padStart(2,'0');
+      if(end) endTime=String(end.getHours()).padStart(2,'0')+':'+String(end.getMinutes()).padStart(2,'0');
+    }
+    let endDate=null;
+    if(allDay&&end){
+      const ex=new Date(end); ex.setDate(ex.getDate()-1);
+      if(ex>start) endDate=fmt(ex);
+    }
+    return {
+      id:feedId+'_'+e.uid.replace(/[^a-z0-9_-]/gi,'_').slice(0,40),
+      title:e.summary, date:fmt(start), endDate, allDay, startTime, endTime,
+      location:e.location||null, notes:e.description||null, category:'other',
+      _icsId:feedId, _icsName:feedName, _icsColor:feedColor,
+    };
+  }).filter(Boolean);
+}
+
+async function fetchIcsFeed(feed){
+  try{
+    const res=await fetch(CORS_PROXY+encodeURIComponent(feed.url),{signal:AbortSignal.timeout(20000)});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const text=await res.text();
+    const evs=icsToLocal(parseICS(text),feed.id,feed.name,feed.color);
+    icsCache[feed.id]=evs;
+    saveIcsCache();
+    const f=icsFeeds.find(x=>x.id===feed.id);
+    if(f){f.lastSync=new Date().toISOString();saveIcsFeeds();}
+    return evs.length;
+  }catch(e){
+    console.warn('ICS fetch failed:',e);
+    return null;
+  }
+}
+
+async function refreshAllIcsFeeds(){
+  if(!icsFeeds.length) return;
+  for(const feed of icsFeeds) await fetchIcsFeed(feed);
+  render();
+}
+
+function renderIcsFeedsList(){
+  const list=document.getElementById('ics-feeds-list');
+  if(!list) return;
+  list.innerHTML='';
+  if(!icsFeeds.length){
+    list.innerHTML='<div style="opacity:.5;font-size:.85rem;padding:6px 0">No imported calendars yet</div>';
+    return;
+  }
+  icsFeeds.forEach(f=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)';
+    const dot=document.createElement('span');
+    dot.style.cssText=`width:14px;height:14px;border-radius:50%;background:${f.color};flex-shrink:0;display:inline-block`;
+    const info=document.createElement('div');
+    info.style.cssText='flex:1;min-width:0';
+    const ts=f.lastSync?new Date(f.lastSync).toLocaleTimeString('default',{hour:'2-digit',minute:'2-digit'}):'never';
+    info.innerHTML=`<div style="font-size:.9rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${f.name}</div><div style="font-size:.75rem;opacity:.55">Last synced: ${ts}</div>`;
+    const syncBtn=document.createElement('button');
+    syncBtn.className='btn btn-ghost';
+    syncBtn.style.cssText='padding:2px 8px;font-size:.8rem';
+    syncBtn.textContent='↻';
+    syncBtn.addEventListener('click',async()=>{
+      syncBtn.textContent='…'; syncBtn.disabled=true;
+      const count=await fetchIcsFeed(f);
+      render(); renderIcsFeedsList();
+      showToast(count!==null?`Synced ${count} events`:'Sync failed — check the URL','success');
+    });
+    const del=document.createElement('button');
+    del.className='btn btn-ghost';
+    del.style.cssText='padding:2px 8px;font-size:.8rem;color:#ef5350';
+    del.textContent='✕';
+    del.addEventListener('click',()=>{
+      delete icsCache[f.id]; saveIcsCache();
+      icsFeeds=icsFeeds.filter(x=>x.id!==f.id); saveIcsFeeds();
+      renderIcsFeedsList(); render();
+    });
+    row.appendChild(dot); row.appendChild(info); row.appendChild(syncBtn); row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('ics-add-btn').addEventListener('click',()=>{
+  document.getElementById('add-ics-form').style.display='';
+  document.getElementById('ics-add-btn').style.display='none';
+  document.getElementById('ics-name-inp').value='';
+  document.getElementById('ics-url-inp').value='';
+  document.getElementById('ics-color-inp').value='#1a73e8';
+  document.getElementById('ics-color-preview').style.background='#1a73e8';
+});
+document.getElementById('ics-add-cancel-btn').addEventListener('click',()=>{
+  document.getElementById('add-ics-form').style.display='none';
+  document.getElementById('ics-add-btn').style.display='';
+});
+document.getElementById('ics-color-inp').addEventListener('input',function(){
+  document.getElementById('ics-color-preview').style.background=this.value;
+});
+document.getElementById('ics-add-confirm-btn').addEventListener('click',async()=>{
+  const name=document.getElementById('ics-name-inp').value.trim();
+  let url=document.getElementById('ics-url-inp').value.trim().replace(/^webcal:\/\//,'https://');
+  if(!name){document.getElementById('ics-name-inp').style.borderColor='#ef5350';setTimeout(()=>document.getElementById('ics-name-inp').style.borderColor='',1500);return;}
+  if(!url){document.getElementById('ics-url-inp').style.borderColor='#ef5350';setTimeout(()=>document.getElementById('ics-url-inp').style.borderColor='',1500);return;}
+  const color=document.getElementById('ics-color-inp').value;
+  const id='ics_'+Date.now().toString(36);
+  const feed={id,name,url,color,lastSync:null};
+  const btn=document.getElementById('ics-add-confirm-btn');
+  btn.textContent='Importing…'; btn.disabled=true;
+  const count=await fetchIcsFeed(feed);
+  btn.textContent='Import'; btn.disabled=false;
+  if(count===null){showToast('Could not fetch that URL — double-check it','error');return;}
+  icsFeeds.push(feed); saveIcsFeeds();
+  document.getElementById('add-ics-form').style.display='none';
+  document.getElementById('ics-add-btn').style.display='';
+  renderIcsFeedsList(); render();
+  showToast(`Imported ${count} events from ${name}!`,'success');
+});
+document.getElementById('settings-btn').addEventListener('click',renderIcsFeedsList,{capture:true});
+
 // ━━━ Navigation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 document.getElementById('prev-btn').addEventListener('click',()=>{
   if(currentView==='week'||currentView==='agenda') cursor.setDate(cursor.getDate()-7);
@@ -3340,7 +3562,8 @@ if(events.length===0){
 render();
 updateSyncStatus();
 pullSync().catch(()=>{}).then(()=>loadFriendEvents().catch(()=>{}));
-setInterval(()=>{ if(syncConnected()){ pullSync().catch(()=>{}); loadFriendEvents().catch(()=>{}); } scheduleReminders(); }, 60000);
+refreshAllIcsFeeds().catch(()=>{});
+setInterval(()=>{ if(syncConnected()){ pullSync().catch(()=>{}); loadFriendEvents().catch(()=>{}); } refreshAllIcsFeeds().catch(()=>{}); scheduleReminders(); }, 60000);
 </script>
 </body>
 </html>
