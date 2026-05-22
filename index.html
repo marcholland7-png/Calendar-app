@@ -3320,6 +3320,8 @@ function parseICS(text){
       cur.dtstart=val;
     }
     else if(prop==='DTEND') cur.dtend=val;
+    else if(prop==='RRULE') cur.rrule=val;
+    else if(prop==='RECURRENCE-ID') cur.recurrenceId=val;
   }
   return evs;
 }
@@ -3334,29 +3336,98 @@ function parseICSDate(str){
   return utc?new Date(Date.UTC(y,mo,d,h,mi)):new Date(y,mo,d,h,mi);
 }
 
+function expandRRule(rruleStr, dtstart){
+  const P={};
+  rruleStr.toUpperCase().split(';').forEach(s=>{
+    const i=s.indexOf('='); if(i<0) return;
+    P[s.slice(0,i)]=s.slice(i+1);
+  });
+  const freq=P.FREQ;
+  if(!['DAILY','WEEKLY','MONTHLY','YEARLY'].includes(freq)) return null;
+  const interval=parseInt(P.INTERVAL)||1;
+  const maxCount=P.COUNT?parseInt(P.COUNT):9999;
+  const until=P.UNTIL?parseICSDate(P.UNTIL):null;
+  const DAY={SU:0,MO:1,TU:2,WE:3,TH:4,FR:5,SA:6};
+  const byday=P.BYDAY?P.BYDAY.split(',').map(d=>DAY[d.replace(/[^A-Z]/g,'')]).filter(d=>d!==undefined):null;
+  const now=new Date();
+  const winStart=new Date(now.getFullYear(),now.getMonth()-2,1);
+  const winEnd=new Date(now.getFullYear()+2,now.getMonth(),now.getDate());
+  const dates=[];
+  if(freq==='WEEKLY'&&byday&&byday.length){
+    const wsBase=new Date(dtstart);
+    wsBase.setDate(wsBase.getDate()-wsBase.getDay());
+    wsBase.setHours(dtstart.getHours(),dtstart.getMinutes(),dtstart.getSeconds(),0);
+    let week=new Date(wsBase);
+    while(week<=winEnd&&dates.length<maxCount){
+      for(const dow of byday){
+        const d=new Date(week); d.setDate(d.getDate()+dow);
+        d.setHours(dtstart.getHours(),dtstart.getMinutes(),dtstart.getSeconds(),0);
+        if(d<dtstart||dates.length>=maxCount) continue;
+        if(until&&d>until) continue;
+        if(d>winEnd) continue;
+        if(d>=winStart) dates.push(d);
+      }
+      week.setDate(week.getDate()+7*interval);
+    }
+  } else {
+    let cur=new Date(dtstart),n=0;
+    while(n<maxCount&&cur<=winEnd){
+      if(until&&cur>until) break;
+      if(cur>=winStart) dates.push(new Date(cur));
+      if(freq==='DAILY')        cur.setDate(cur.getDate()+interval);
+      else if(freq==='WEEKLY')  cur.setDate(cur.getDate()+7*interval);
+      else if(freq==='MONTHLY') cur.setMonth(cur.getMonth()+interval);
+      else                       cur.setFullYear(cur.getFullYear()+interval);
+      n++;
+    }
+  }
+  return dates;
+}
+
 function icsToLocal(rawEvs, feedId, feedName, feedColor){
-  return rawEvs.filter(e=>e.uid&&e.dtstart&&e.summary&&!e.cancelled).map(e=>{
+  // collect recurrence-id overrides so we can exclude those base occurrences
+  const overrides=new Set(rawEvs.filter(e=>e.recurrenceId&&e.uid).map(e=>e.uid+'_'+e.recurrenceId));
+  const result=[];
+  rawEvs.filter(e=>e.uid&&e.dtstart&&e.summary&&!e.cancelled&&!e.recurrenceId).forEach(e=>{
     const start=parseICSDate(e.dtstart);
     const end=e.dtend?parseICSDate(e.dtend):null;
-    if(!start) return null;
+    if(!start) return;
     const allDay=!!e.allDay;
-    let startTime=null,endTime=null;
-    if(!allDay){
-      startTime=String(start.getHours()).padStart(2,'0')+':'+String(start.getMinutes()).padStart(2,'0');
-      if(end) endTime=String(end.getHours()).padStart(2,'0')+':'+String(end.getMinutes()).padStart(2,'0');
-    }
-    let endDate=null;
-    if(allDay&&end){
-      const ex=new Date(end); ex.setDate(ex.getDate()-1);
-      if(ex>start) endDate=fmt(ex);
-    }
-    return {
-      id:feedId+'_'+e.uid.replace(/[^a-z0-9_-]/gi,'_').slice(0,40),
-      title:e.summary, date:fmt(start), endDate, allDay, startTime, endTime,
-      location:e.location||null, notes:e.description||null, category:'other',
-      _icsId:feedId, _icsName:feedName, _icsColor:feedColor,
+    const duration=end?(end-start):0;
+    const makeEvent=(occStart,idx)=>{
+      const occEnd=duration>0?new Date(occStart.getTime()+duration):(end?new Date(end):null);
+      let startTime=null,endTime=null;
+      if(!allDay){
+        startTime=String(occStart.getHours()).padStart(2,'0')+':'+String(occStart.getMinutes()).padStart(2,'0');
+        if(occEnd) endTime=String(occEnd.getHours()).padStart(2,'0')+':'+String(occEnd.getMinutes()).padStart(2,'0');
+      }
+      let endDate=null;
+      if(allDay&&occEnd){
+        const ex=new Date(occEnd); ex.setDate(ex.getDate()-1);
+        if(ex>occStart) endDate=fmt(ex);
+      }
+      return {
+        id:feedId+'_'+e.uid.replace(/[^a-z0-9_-]/gi,'_').slice(0,40)+(idx?'_r'+idx:''),
+        title:e.summary, date:fmt(occStart), endDate, allDay, startTime, endTime,
+        location:e.location||null, notes:e.description||null, category:'other',
+        _icsId:feedId, _icsName:feedName, _icsColor:feedColor,
+      };
     };
-  }).filter(Boolean);
+    if(e.rrule){
+      const occs=expandRRule(e.rrule,start);
+      if(occs&&occs.length){
+        occs.forEach((occ,i)=>{
+          const key=e.uid+'_'+occ.toISOString().slice(0,10).replace(/-/g,'');
+          if(!overrides.has(key)) result.push(makeEvent(occ,i));
+        });
+      } else {
+        result.push(makeEvent(start,0));
+      }
+    } else {
+      result.push(makeEvent(start,0));
+    }
+  });
+  return result;
 }
 
 async function fetchIcsFeed(feed){
