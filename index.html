@@ -918,25 +918,14 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
       <p class="settings-note" style="margin-bottom:10px">Sync from Google, Apple, or Outlook. Events from your other calendar app will appear here automatically.</p>
       <div id="ics-feeds-list"></div>
       <div id="add-ics-form" style="display:none;margin-top:12px">
-        <div class="fg">
-          <label>Name <span style="text-transform:none;font-weight:400">(e.g. My Google Calendar)</span></label>
-          <input type="text" id="ics-name-inp" placeholder="Google Calendar" autocomplete="off">
+        <div class="settings-note" style="margin-bottom:12px;line-height:1.6">
+          <strong>Apple (iCloud.com):</strong> hover a calendar name → click 📡 → enable Public Calendar → copy link<br>
+          <strong>Google:</strong> calendar.google.com → Settings → [calendar name] → "Secret address in iCal format"
         </div>
-        <div class="fg">
-          <label>Calendar URL</label>
-          <input type="url" id="ics-url-inp" placeholder="Paste your iCal / ICS link here" autocomplete="off" style="font-size:.78rem;font-family:monospace">
-        </div>
-        <div class="fg" style="display:flex;align-items:center;gap:12px">
-          <label style="margin:0;flex-shrink:0">Colour</label>
-          <input type="color" id="ics-color-inp" value="#1a73e8" style="width:48px;height:36px;border:none;border-radius:8px;cursor:pointer;padding:2px;background:transparent">
-          <span id="ics-color-preview" style="flex:1;height:36px;border-radius:8px;background:#1a73e8;transition:background .1s"></span>
-        </div>
-        <div class="settings-note" id="ics-help" style="margin:8px 0 14px;line-height:1.6">
-          <strong>Google:</strong> calendar.google.com → Settings → [your calendar] → scroll to "Secret address in iCal format" → copy link<br>
-          <strong>Apple:</strong> Calendar app → right-click calendar → Share → enable Public Calendar → copy link (change webcal:// to https://)
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-primary" id="ics-add-confirm-btn" style="flex:1">Import</button>
+        <div id="ics-rows"></div>
+        <button class="btn btn-ghost" id="ics-add-row-btn" style="width:100%;margin:8px 0">+ Add another calendar</button>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="btn btn-primary" id="ics-add-confirm-btn" style="flex:1">Import All</button>
           <button class="btn btn-ghost" id="ics-add-cancel-btn" style="flex:1">Cancel</button>
         </div>
       </div>
@@ -3434,39 +3423,64 @@ function renderIcsFeedsList(){
   });
 }
 
+const ICS_ROW_COLORS=['#1a73e8','#e67c73','#f6c026','#33b679','#8e24aa','#039be5'];
+function addIcsRow(){
+  const rows=document.getElementById('ics-rows');
+  const idx=rows.children.length;
+  const color=ICS_ROW_COLORS[idx%ICS_ROW_COLORS.length];
+  const row=document.createElement('div');
+  row.style.cssText='display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)';
+  row.innerHTML=`
+    <input type="color" value="${color}" style="width:36px;height:36px;border:none;border-radius:8px;cursor:pointer;padding:2px;background:transparent;margin-top:4px">
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <input type="text" placeholder="Name (e.g. Work, Personal)" autocomplete="off" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:.88rem">
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="url" placeholder="Paste webcal:// or https:// link" autocomplete="off" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:.75rem;font-family:monospace">
+        ${idx>0?'<button style="background:none;border:none;color:#ef5350;font-size:1.1rem;cursor:pointer;padding:0 4px" onclick="this.closest(\'div[style*=grid]\').remove()">✕</button>':''}
+      </div>
+    </div>`;
+  rows.appendChild(row);
+}
 document.getElementById('ics-add-btn').addEventListener('click',()=>{
   document.getElementById('add-ics-form').style.display='';
   document.getElementById('ics-add-btn').style.display='none';
-  document.getElementById('ics-name-inp').value='';
-  document.getElementById('ics-url-inp').value='';
-  document.getElementById('ics-color-inp').value='#1a73e8';
-  document.getElementById('ics-color-preview').style.background='#1a73e8';
+  document.getElementById('ics-rows').innerHTML='';
+  addIcsRow();
 });
+document.getElementById('ics-add-row-btn').addEventListener('click',addIcsRow);
 document.getElementById('ics-add-cancel-btn').addEventListener('click',()=>{
   document.getElementById('add-ics-form').style.display='none';
   document.getElementById('ics-add-btn').style.display='';
 });
-document.getElementById('ics-color-inp').addEventListener('input',function(){
-  document.getElementById('ics-color-preview').style.background=this.value;
-});
 document.getElementById('ics-add-confirm-btn').addEventListener('click',async()=>{
-  const name=document.getElementById('ics-name-inp').value.trim();
-  let url=document.getElementById('ics-url-inp').value.trim().replace(/^webcal:\/\//,'https://');
-  if(!name){document.getElementById('ics-name-inp').style.borderColor='#ef5350';setTimeout(()=>document.getElementById('ics-name-inp').style.borderColor='',1500);return;}
-  if(!url){document.getElementById('ics-url-inp').style.borderColor='#ef5350';setTimeout(()=>document.getElementById('ics-url-inp').style.borderColor='',1500);return;}
-  const color=document.getElementById('ics-color-inp').value;
-  const id='ics_'+Date.now().toString(36);
-  const feed={id,name,url,color,lastSync:null};
+  const rows=[...document.getElementById('ics-rows').children];
+  const entries=rows.map(row=>{
+    const [colorInp,,nameInp,,urlInp]=row.querySelectorAll('input');
+    return {
+      name:(nameInp?.value||'').trim(),
+      url:(urlInp?.value||'').trim().replace(/^webcal:\/\//,'https://'),
+      color:colorInp?.value||'#1a73e8',
+    };
+  }).filter(e=>e.url);
+  if(!entries.length){showToast('Add at least one calendar URL','error');return;}
+  const missing=entries.find(e=>!e.name);
+  if(missing){showToast('Give each calendar a name','error');return;}
   const btn=document.getElementById('ics-add-confirm-btn');
   btn.textContent='Importing…'; btn.disabled=true;
-  const count=await fetchIcsFeed(feed);
-  btn.textContent='Import'; btn.disabled=false;
-  if(count===null){showToast('Could not fetch that URL — double-check it','error');return;}
-  icsFeeds.push(feed); saveIcsFeeds();
+  let total=0, failed=0;
+  for(const e of entries){
+    const id='ics_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,5);
+    const feed={id,name:e.name,url:e.url,color:e.color,lastSync:null};
+    const count=await fetchIcsFeed(feed);
+    if(count===null){ failed++; } else { icsFeeds.push(feed); total+=count; }
+  }
+  saveIcsFeeds();
+  btn.textContent='Import All'; btn.disabled=false;
   document.getElementById('add-ics-form').style.display='none';
   document.getElementById('ics-add-btn').style.display='';
   renderIcsFeedsList(); render();
-  showToast(`Imported ${count} events from ${name}!`,'success');
+  if(failed>0) showToast(`${entries.length-failed} imported, ${failed} failed — check those URLs`,'error');
+  else showToast(`Imported ${total} events across ${entries.length} calendar${entries.length>1?'s':''}!`,'success');
 });
 document.getElementById('settings-btn').addEventListener('click',renderIcsFeedsList,{capture:true});
 
