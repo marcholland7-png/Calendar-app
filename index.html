@@ -710,6 +710,13 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
       <label>Notes <span style="text-transform:none;font-weight:400">(optional)</span></label>
       <textarea id="f-notes" placeholder="Add any extra details…"></textarea>
     </div>
+    <div class="fg" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0">
+      <label style="margin:0">🔒 Private event <span style="text-transform:none;font-weight:400;font-size:12px;opacity:0.6">— hidden from friends</span></label>
+      <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0">
+        <input type="checkbox" id="f-private" style="opacity:0;width:0;height:0;position:absolute">
+        <span id="f-private-slider" style="position:absolute;cursor:pointer;inset:0;background:#ccc;border-radius:24px;transition:.2s"></span>
+      </label>
+    </div>
     <div class="fg">
       <label>Reminder <span style="text-transform:none;font-weight:400">(optional)</span></label>
       <div class="repeat-pills" id="f-reminder-pills" style="flex-wrap:wrap;gap:6px">
@@ -1205,7 +1212,7 @@ function renderMonth(container) {
       const chip=el('div','chip chip-single');
       chip.style.cssText=`background:${color}18;color:${color};border-left-color:${color}`;
       const txt=el('span','chip-txt');
-      txt.textContent=ev.title;
+      txt.textContent=(ev.private?'🔒 ':'')+ev.title;
       chip.appendChild(txt);
       if(ev.startTime){
         const time=el('span','chip-time');
@@ -1270,7 +1277,7 @@ function openDaySheet(d) {
       const row=el('div','ag-ev'); row.style.cursor=isFriend?'default':'pointer';
       const bar=el('div','ag-bar'); bar.style.background=color;
       const info=el('div','ag-info');
-      const title=el('div','ag-title'); title.textContent=ev.title;
+      const title=el('div','ag-title'); title.textContent=(ev.private?'🔒 ':'')+ev.title;
       const meta=el('div','ag-meta');
       if(ev.allDay) meta.innerHTML='<span>All day</span>';
       else meta.innerHTML=`<span>${ev.startTime||''}${ev.endTime?' – '+ev.endTime:''}</span>`;
@@ -1405,7 +1412,7 @@ function renderWeek(container) {
       const e=el('div','wk-ev');
       e.style.cssText=`top:${top}px;height:${h}px;background:${color}`;
       const timeSpan=el('span','ev-time'); timeSpan.textContent=ev.startTime+(ev.endTime?' – '+ev.endTime:'');
-      const titleSpan=el('span','ev-title'); titleSpan.textContent=ev.title+(isFriend?` (${ev._friendName})`:'');
+      const titleSpan=el('span','ev-title'); titleSpan.textContent=(ev.private?'🔒 ':'')+ev.title+(isFriend?` (${ev._friendName})`:'');
       e.appendChild(timeSpan); e.appendChild(titleSpan);
       if(isFriend){
         e.style.opacity='0.85';
@@ -1460,7 +1467,7 @@ function renderAgenda(container) {
         const row=el('div','ag-ev');
         const bar=el('div','ag-bar'); bar.style.background=color;
         const info=el('div','ag-info');
-        const title=el('div','ag-title'); title.textContent=ev.title;
+        const title=el('div','ag-title'); title.textContent=(ev.private?'🔒 ':'')+ev.title;
         const meta=el('div','ag-meta');
         if(ev.allDay) meta.innerHTML='<span>All day</span>';
         else meta.innerHTML=`<span>${ev.startTime||''}${ev.endTime?' – '+ev.endTime:''}</span>`;
@@ -1510,6 +1517,10 @@ function openEventForm(id, prefDate, prefTime, prefill) {
   reminderType = p.reminder || 'none';
   document.querySelectorAll('#f-reminder-pills .repeat-pill').forEach(x=>
     x.classList.toggle('sel', x.dataset.reminder===reminderType));
+  // Restore private toggle
+  const isPrivate=!!p.private;
+  document.getElementById('f-private').checked=isPrivate;
+  document.getElementById('f-private-slider').style.background=isPrivate?'var(--accent)':'#ccc';
   // Smart input: show only for new events, clear it
   const smartWrap=document.getElementById('smart-wrap');
   smartWrap.style.display=id?'none':'';
@@ -1582,6 +1593,9 @@ document.getElementById('f-title').addEventListener('input',function(){
 document.getElementById('f-allday').addEventListener('change',function(){
   document.getElementById('f-time-wrap').style.display=this.checked?'none':'';
 });
+document.getElementById('f-private').addEventListener('change',function(){
+  document.getElementById('f-private-slider').style.background=this.checked?'var(--accent)':'#ccc';
+});
 document.getElementById('f-repeat-pills').addEventListener('click',e=>{
   const p=e.target.closest('.repeat-pill'); if(!p) return;
   repeatType=p.dataset.repeat;
@@ -1627,6 +1641,7 @@ document.getElementById('f-save').addEventListener('click',()=>{
     notes:    document.getElementById('f-notes').value.trim()||null,
     category: document.querySelector('.cat-pill.sel')?.dataset.cat||'other',
     reminder: reminderType==='none'?null:reminderType,
+    private:  document.getElementById('f-private').checked||false,
   };
   if(editingId){
     const i=events.findIndex(e=>e.id===editingId); if(i!==-1) events[i]=ev;
@@ -2785,7 +2800,7 @@ async function pushSync(){
     const ts=new Date().toISOString();
     const res=await fetch(syncUrl()+'/rest/v1/sync',{
       method:'POST', headers:syncHeaders(),
-      body:JSON.stringify({code:syncCode(),events,todos,updated_at:ts}),
+      body:JSON.stringify({code:syncCode(),events:events.filter(e=>!e.private),todos,updated_at:ts}),
     });
     if(res.ok) localStorage.setItem('mycal_sync_ts',ts);
   }catch(e){}
