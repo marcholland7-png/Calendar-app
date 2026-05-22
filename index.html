@@ -2480,15 +2480,20 @@ navigator.serviceWorker?.addEventListener('message',e=>{
 if('Notification' in window && Notification.permission==='granted') scheduleReminders();
 
 // ━━━ FAB ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Runs Chrono over OCR-parsed result and overrides date/time if Chrono finds something better.
-// Handles formats like "Saturday, 23 May 14:30 - 16:00" that the custom regex misses or garbles.
+// Runs Chrono over OCR-parsed result and fills in time, and date only when needed.
 function enhanceWithChrono(parsed, rawText) {
   if (typeof chrono === 'undefined') return parsed;
   const cr = chrono.parse(rawText, new Date(), { forwardDate: true });
   if (!cr.length) return parsed;
   const r = cr[0]; const d = r.start.date();
   if (r.start.isCertain('hour')) {
-    parsed.date = fmt(d);
+    // Only override the date if Chrono explicitly found one AND our parser didn't.
+    // isCertain('day') means Chrono read an actual date from the text (not just inferred today).
+    // This prevents Chrono from stomping a correct date our regex already found.
+    const ourParserFoundDate = parsed.date && parsed.date !== fmt(today);
+    if (!ourParserFoundDate || r.start.isCertain('day')) {
+      parsed.date = fmt(d);
+    }
     parsed.allDay = false;
     parsed.startTime = String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
     if (r.end) {
