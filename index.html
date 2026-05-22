@@ -2200,7 +2200,10 @@ function cleanOCRText(raw) {
 // Parses OCR-extracted text — handles printed date formats, times, and location cues.
 // No API, no network — pure regex + date arithmetic.
 function parseOCRText(raw) {
-  const text = cleanOCRText(raw);
+  // Strip the phone status-bar line (e.g. "23:41" top-left of any screenshot)
+  // before any parsing so it can't pollute time or date detection.
+  const rawStripped = raw.replace(/^\s*\d{1,2}:\d{2}\s*[\n\r]+/, '');
+  const text = cleanOCRText(rawStripped);
   console.log('[Parse] Raw OCR input:\n' + text);
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   console.log(`[Parse] ${lines.length} non-empty lines`);
@@ -2309,7 +2312,13 @@ function parseOCRText(raw) {
   const halfM = text.match(/\bhalf\s+(\d{1,2})\b/i);
   if (halfM) { const n=parseInt(halfM[1]); setT(String((n-1+24)%24).padStart(2,'0')+':30', String(n).padStart(2,'0')+':30', 'Dutch half'); }
 
-  // 2 — Dot-format range: "19.00-20.30" (hour ≥ 5 to skip score/level numbers like 4.25-5.25)
+  // 2 — Explicit 24h range: "10:00 - 11:30", "14:00→15:30", "10:00 to 11:30"
+  if (!startTime) {
+    const r24 = text.match(/\b([01]?\d|2[0-3]):([0-5]\d)\s*(?:[-–—][-–—]?|to|→|>)\s*([01]?\d|2[0-3]):([0-5]\d)\b/i);
+    if (r24) setT(`${r24[1].padStart(2,'0')}:${r24[2]}`, `${r24[3].padStart(2,'0')}:${r24[4]}`, '24h range');
+  }
+
+  // 2b — Dot-format range: "19.00-20.30" (hour ≥ 5 to skip score/level numbers like 4.25-5.25)
   if (!startTime) {
     const dr = text.match(/\b([5-9]|[01]\d|2[0-3])\.([0-5]\d)\s*-\s*([5-9]|[01]\d|2[0-3])\.([0-5]\d)\b/);
     if (dr) setT(`${dr[1].padStart(2,'0')}:${dr[2]}`, `${dr[3].padStart(2,'0')}:${dr[4]}`, 'dot range');
@@ -2359,7 +2368,7 @@ function parseOCRText(raw) {
   const tl = text.toLowerCase();
   let category = 'other';
   if      (/\b(meeting|conference|work|office|call|deadline|project|client|webinar|zoom|standup|sprint|sync|vergadering|afspraak|werk|kantoor|presentatie)\b/.test(tl)) category='work';
-  else if (/\b(doctor|dentist|gp|hospital|gym|workout|exercise|health|medical|therapy|appointment|clinic|physio|dokter|tandarts|sport|training|ziekenhuis)\b/.test(tl)) category='health';
+  else if (/\b(doctor|dentist|gp|hospital|gym|workout|exercise|health|medical|therapy|appointment|clinic|physio|dokter|tandarts|sport|training|ziekenhuis|padel|tennis|squash|badminton|pickleball|voetbal|basketball|golf|zwemmen|zwembad|baan|court)\b/.test(tl)) category='health';
   else if (/\b(party|birthday|dinner|lunch|brunch|coffee|drinks|date|concert|movie|gig|festival|wedding|celebration|bbq|feest|verjaardag|diner|koffie|concert)\b/.test(tl)) category='social';
   else if (/\b(family|mom|mum|dad|kids|children|parents|reunion|anniversary|familie|kinderen|school)\b/.test(tl)) category='family';
   else if (/\b(reminder|errand|shopping|chore|pickup|delivery|collect|drop.?off)\b/.test(tl)) category='personal';
@@ -2376,10 +2385,16 @@ function parseOCRText(raw) {
     if (/^\d{1,2}[:.]\d{2}(\s*(am|pm|uur))?$/i.test(clean)) continue; // lone time
     if (/^\d{1,2}[\/.\-]\d{1,2}([\/.\-]\d{2,4})?$/.test(clean)) continue; // lone date
     if (/^\d{1,2}[\/.\-]\d+/.test(clean)) continue;
+    // Skip lines containing a time pattern — they're date/time rows, not a title
+    if (/\b\d{1,2}:\d{2}\b/.test(clean)) continue;
+    // Skip common booking-app UI boilerplate that isn't the event name
     if (/^(rsvp|reply|yes|no|maybe|ok|tap|swipe|share|invite|calendar|schedule|info|see|view|open|click|add|join|attend)$/i.test(clean)) continue;
+    if (/^(you are|the result of|view the|requests for|out of range|court booked|open match|gender|level|price|players|competitive|men only|women only|mixed)/i.test(clean)) continue;
     let score = Math.min(clean.length, 55);
     if (/[a-z]/.test(clean) && /[A-Z]/.test(clean)) score += 8;
-    if (/meeting|appointment|afspraak|vergadering|verjaardag|birthday|lunch|dinner|doctor|tandarts|training|les|massage|kapper|haircut|concert|feest|party/i.test(clean)) score += 25;
+    if (/meeting|appointment|afspraak|vergadering|verjaardag|birthday|lunch|dinner|doctor|tandarts|training|les|massage|kapper|haircut|concert|feest|party|padel|tennis|squash|badminton|pickleball|reservering/i.test(clean)) score += 25;
+    // A line that IS the sport/activity name on its own (e.g. "PADEL") — make it win
+    if (/^(padel|tennis|squash|badminton|pickleball|voetbal|football|basketball|golf|yoga|pilates|crossfit|fitness|zwemmen|padel match)$/i.test(clean)) score += 40;
     if (clean.length < 5) score -= 12;
     if (clean === clean.toUpperCase() && clean.length < 12) score -= 10;
     if (/^(today|tomorrow|vandaag|morgen|monday|tuesday|wednesday|thursday|friday|saturday|sunday|maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag|zondag)$/i.test(clean)) score -= 20;
