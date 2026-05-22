@@ -552,6 +552,11 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
     </div>
   </header>
 
+  <div id="friend-view-banner" style="display:none;padding:8px 16px;font-size:.82rem;font-weight:600;display:none;align-items:center;justify-content:space-between;gap:8px">
+    <span id="friend-view-label"></span>
+    <button id="friend-view-exit" style="background:rgba(255,255,255,.25);border:none;border-radius:20px;padding:3px 10px;font-size:.75rem;font-weight:700;cursor:pointer;color:inherit">✕ Back to mine</button>
+  </div>
+
   <main id="main"></main>
 
   <nav class="bottom-nav">
@@ -873,6 +878,13 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
         <div class="fg">
           <label>Colour</label>
           <div id="friend-color-picker" style="display:flex;gap:8px;margin-top:6px"></div>
+        </div>
+        <div class="fg">
+          <label>Show on my calendar as…</label>
+          <div class="repeat-pills" id="friend-view-pills" style="margin-top:4px">
+            <div class="repeat-pill sel" data-fview="merged">Merged with mine</div>
+            <div class="repeat-pill" data-fview="separate">Separate view only</div>
+          </div>
         </div>
         <div style="display:flex;gap:8px;margin-top:14px">
           <button class="btn btn-primary" id="friend-add-confirm-btn" style="flex:1">Add</button>
@@ -2923,8 +2935,16 @@ function friendEventsForDate(d){
 }
 
 function allEventsForDate(d){
+  if(separateViewFriend){
+    return (friendEvents[separateViewFriend]||[])
+      .filter(ev=>eventSpansDate(ev,d))
+      .sort((a,b)=>(a.startTime||'00:00')>(b.startTime||'00:00')?1:-1);
+  }
   const own=eventsForDate(d);
-  const fr=friendEventsForDate(d);
+  const fr=friendEventsForDate(d).filter(ev=>{
+    const f=friends.find(x=>x.id===ev._friendId);
+    return f&&(f.view||'merged')==='merged';
+  });
   return [...own,...fr].sort((a,b)=>(a.startTime||'00:00')>(b.startTime||'00:00')?1:-1);
 }
 
@@ -2976,6 +2996,25 @@ document.getElementById('wallpaper-remove-btn').addEventListener('click',()=>{
 
 // ━━━ Friend Calendars — Settings UI ━━━━━━━━━━━━━━━━━━━
 let selectedFriendColor = FRIEND_COLORS[0];
+let selectedFriendView  = 'merged';
+let separateViewFriend  = null; // friendId when viewing a friend's calendar alone
+
+function enterSeparateView(friendId){
+  separateViewFriend=friendId;
+  const f=friends.find(x=>x.id===friendId);
+  const banner=document.getElementById('friend-view-banner');
+  banner.style.cssText=`display:flex;padding:8px 16px;font-size:.82rem;font-weight:600;align-items:center;justify-content:space-between;gap:8px;background:${f.color};color:#fff`;
+  document.getElementById('friend-view-label').textContent=`Viewing ${f.name}'s calendar`;
+  closeSheet(); render();
+}
+
+function exitSeparateView(){
+  separateViewFriend=null;
+  document.getElementById('friend-view-banner').style.display='none';
+  render();
+}
+
+document.getElementById('friend-view-exit').addEventListener('click',exitSeparateView);
 
 function renderFriendsList(){
   const list=document.getElementById('friends-list');
@@ -2989,20 +3028,39 @@ function renderFriendsList(){
   }
   friends.forEach(f=>{
     const row=el('div','');
-    row.style.cssText='display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)';
+    row.style.cssText='display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border)';
     const dot=el('span','');
-    dot.style.cssText=`width:14px;height:14px;border-radius:50%;background:${f.color};flex-shrink:0`;
+    dot.style.cssText=`width:12px;height:12px;border-radius:50%;background:${f.color};flex-shrink:0`;
     const name=el('span',''); name.textContent=f.name; name.style.flex='1';
+
+    // toggle merged/separate
+    const viewMode=f.view||'merged';
+    const toggleBtn=el('button','btn btn-ghost');
+    toggleBtn.textContent=viewMode==='merged'?'Merged':'Separate';
+    toggleBtn.style.cssText='padding:3px 8px;font-size:.72rem';
+    toggleBtn.addEventListener('click',()=>{
+      f.view=viewMode==='merged'?'separate':'merged';
+      saveFriends(); renderFriendsList(); render();
+    });
+
+    const viewBtn=el('button','btn btn-ghost');
+    viewBtn.textContent='View';
+    viewBtn.style.cssText='padding:3px 8px;font-size:.72rem';
+    viewBtn.addEventListener('click',()=>enterSeparateView(f.id));
+
     const removeBtn=el('button','btn btn-ghost');
-    removeBtn.textContent='Remove';
-    removeBtn.style.cssText='padding:4px 10px;font-size:.75rem';
+    removeBtn.textContent='✕';
+    removeBtn.style.cssText='padding:3px 8px;font-size:.75rem;color:var(--muted)';
     removeBtn.addEventListener('click',()=>{
+      if(separateViewFriend===f.id) exitSeparateView();
       friends=friends.filter(x=>x.id!==f.id);
       delete friendEvents[f.id];
       saveFriends(); renderFriendsList(); render();
       showToast(`${f.name} removed`);
     });
-    row.appendChild(dot); row.appendChild(name); row.appendChild(removeBtn);
+
+    row.appendChild(dot); row.appendChild(name);
+    row.appendChild(toggleBtn); row.appendChild(viewBtn); row.appendChild(removeBtn);
     list.appendChild(row);
   });
 }
@@ -3023,12 +3081,20 @@ function buildColorPicker(){
   });
 }
 
+document.getElementById('friend-view-pills').addEventListener('click',e=>{
+  const p=e.target.closest('.repeat-pill'); if(!p) return;
+  selectedFriendView=p.dataset.fview;
+  document.querySelectorAll('#friend-view-pills .repeat-pill').forEach(x=>x.classList.toggle('sel',x===p));
+});
+
 document.getElementById('friend-add-btn').addEventListener('click',()=>{
   document.getElementById('add-friend-form').style.display='';
   document.getElementById('friend-add-btn').style.display='none';
   document.getElementById('friend-name-inp').value='';
   document.getElementById('friend-code-inp').value='';
   selectedFriendColor=FRIEND_COLORS[0];
+  selectedFriendView='merged';
+  document.querySelectorAll('#friend-view-pills .repeat-pill').forEach((p,i)=>p.classList.toggle('sel',i===0));
   buildColorPicker();
   setTimeout(()=>document.getElementById('friend-name-inp').focus(),50);
 });
@@ -3051,7 +3117,7 @@ document.getElementById('friend-add-confirm-btn').addEventListener('click',async
     const rows=await res.json();
     if(!rows.length){ showToast('Sync code not found','error'); btn.textContent='Add'; btn.disabled=false; return; }
     const id=Date.now().toString(36);
-    const f={id,name,code,color:selectedFriendColor};
+    const f={id,name,code,color:selectedFriendColor,view:selectedFriendView};
     friends.push(f);
     friendEvents[id]=(rows[0].events||[]).map(ev=>({...ev,_friendId:id,_friendName:name,_friendColor:selectedFriendColor}));
     saveFriends();
