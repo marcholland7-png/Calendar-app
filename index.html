@@ -927,26 +927,18 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
     <!-- Not connected: setup form -->
     <div id="sync-form-wrap">
       <div class="settings-note" style="margin-bottom:16px;line-height:1.6">
-        Paste your <strong style="color:var(--text)">Supabase</strong> details to sync between Safari and the installed app. Free at supabase.com.
-      </div>
-      <div class="fg">
-        <label>Supabase Project URL</label>
-        <input type="url" id="sync-url" placeholder="https://xxxx.supabase.co">
-      </div>
-      <div class="fg">
-        <label>Supabase Anon Key</label>
-        <input type="text" id="sync-key" placeholder="eyJhbGc…" autocomplete="off">
+        Sync your events between devices using a <strong style="color:var(--text)">sync code</strong>. No account needed.
       </div>
       <div class="fg">
         <label>This device is…</label>
         <div class="repeat-pills" id="sync-mode-pills" style="margin-top:4px">
-          <div class="repeat-pill sel" data-mode="new">First device</div>
-          <div class="repeat-pill" data-mode="existing">Have a code</div>
+          <div class="repeat-pill sel" data-mode="new">New / first device</div>
+          <div class="repeat-pill" data-mode="existing">I have a code</div>
         </div>
       </div>
       <div id="sync-existing-wrap" style="display:none">
         <div class="fg">
-          <label>Sync Code</label>
+          <label>Your Sync Code</label>
           <input type="text" id="sync-code-input" placeholder="e.g. A3B7C2D1" maxlength="8"
             style="text-transform:uppercase;letter-spacing:.12em;font-size:1.1rem;font-weight:700">
         </div>
@@ -2757,16 +2749,18 @@ document.getElementById('clear-btn').addEventListener('click',()=>{
 });
 
 // ━━━ Cloud Sync (Supabase) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const SUPABASE_URL = 'https://jmmwqqssqujsiedafqdd.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_0MIMm7jy7QykSBBBOZb5nw_wLaGbnoN';
 let syncInProgress=false;
-function syncUrl()  { return localStorage.getItem('mycal_sync_url')||''; }
-function syncKey()  { return localStorage.getItem('mycal_sync_key')||''; }
+function syncUrl()  { return SUPABASE_URL; }
+function syncKey()  { return SUPABASE_KEY; }
 function syncCode() { return localStorage.getItem('mycal_sync_code')||''; }
 function syncTs()   { return localStorage.getItem('mycal_sync_ts')||'0'; }
-function syncConnected(){ return !!(syncUrl()&&syncKey()&&syncCode()); }
+function syncConnected(){ return !!syncCode(); }
 function syncHeaders(){
   return {
-    'apikey': syncKey(),
-    'Authorization': 'Bearer '+syncKey(),
+    'apikey': SUPABASE_KEY,
+    'Authorization': 'Bearer '+SUPABASE_KEY,
     'Content-Type': 'application/json',
     'Prefer': 'resolution=merge-duplicates',
   };
@@ -2815,8 +2809,6 @@ function updateSyncStatus(){
 }
 
 function openSyncSheet(){
-  document.getElementById('sync-url').value=syncUrl();
-  document.getElementById('sync-key').value=syncKey();
   document.getElementById('sync-code-input').value='';
   setSyncMode('new');
   if(syncConnected()){
@@ -2842,9 +2834,6 @@ document.getElementById('sync-mode-pills').addEventListener('click',e=>{
 });
 
 document.getElementById('sync-connect-btn').addEventListener('click',async()=>{
-  const url=document.getElementById('sync-url').value.trim().replace(/\/+$/,'');
-  const key=document.getElementById('sync-key').value.trim();
-  if(!url||!key){ showToast('Enter your Supabase URL and key','error'); return; }
   const btn=document.getElementById('sync-connect-btn');
   btn.textContent='Connecting…'; btn.disabled=true;
 
@@ -2853,18 +2842,15 @@ document.getElementById('sync-connect-btn').addEventListener('click',async()=>{
     code=document.getElementById('sync-code-input').value.trim().toUpperCase();
     if(code.length<4){ showToast('Enter your sync code','error'); btn.textContent='Connect'; btn.disabled=false; return; }
   } else {
-    // Generate 8-char alphanumeric code
     code=(Math.random().toString(36).slice(2,6)+Math.random().toString(36).slice(2,6)).toUpperCase().slice(0,8);
   }
 
   try{
-    const res=await fetch(url+`/rest/v1/sync?code=eq.${code}`,{
-      headers:{'apikey':key,'Authorization':'Bearer '+key,'Content-Type':'application/json'},
+    const res=await fetch(SUPABASE_URL+`/rest/v1/sync?code=eq.${code}`,{
+      headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY,'Content-Type':'application/json'},
     });
     if(!res.ok) throw new Error(res.status);
 
-    localStorage.setItem('mycal_sync_url',url);
-    localStorage.setItem('mycal_sync_key',key);
     localStorage.setItem('mycal_sync_code',code);
 
     if(syncMode==='existing'){
@@ -2906,7 +2892,7 @@ document.getElementById('sync-now-btn').addEventListener('click',async()=>{
 });
 document.getElementById('sync-disconnect-btn').addEventListener('click',()=>{
   if(!confirm('Disconnect sync? Your local events will not be deleted.')) return;
-  ['mycal_sync_url','mycal_sync_key','mycal_sync_code','mycal_sync_ts'].forEach(k=>localStorage.removeItem(k));
+  ['mycal_sync_code','mycal_sync_ts'].forEach(k=>localStorage.removeItem(k));
   updateSyncStatus(); closeSheet(); showToast('Disconnected');
 });
 
