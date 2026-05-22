@@ -1230,7 +1230,7 @@ function renderMonth(container) {
     const evs=allEventsForDate(d);
     evs.slice(0,3).forEach(ev=>{
       const isFriend=!!ev._friendId;
-      const color=isFriend?ev._friendColor:(CAT[ev.category]||CAT.other).color;
+      const color=isFriend?ev._friendColor:(CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
       const chip=el('div','chip chip-single');
       chip.style.cssText=`background:${color}18;color:${color};border-left-color:${color}`;
       const txt=el('span','chip-txt');
@@ -1295,7 +1295,7 @@ function openDaySheet(d) {
   } else {
     evs.forEach(ev=>{
       const isFriend=!!ev._friendId;
-      const color=isFriend?ev._friendColor:(CAT[ev.category]||CAT.other).color;
+      const color=isFriend?ev._friendColor:(CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
       const row=el('div','ag-ev'); row.style.cursor=isFriend?'default':'pointer';
       const bar=el('div','ag-bar'); bar.style.background=color;
       const info=el('div','ag-info');
@@ -1308,7 +1308,7 @@ function openDaySheet(d) {
       if(ev.notes){const n=el('div','ag-notes');n.textContent=ev.notes;info.appendChild(n);}
       const badge=el('div','ag-badge');
       badge.style.cssText=`background:${color}22;color:${color}`;
-      badge.textContent=isFriend?ev._friendName:(CAT[ev.category]||CAT.other).label;
+      badge.textContent=isFriend?ev._friendName:(CAT[ev.category]||{label:ev.category||'Other'}).label;
       row.appendChild(bar); row.appendChild(info); row.appendChild(badge);
       if(!isFriend) row.addEventListener('click',()=>{ closeSheet(); openEventForm(ev.id); });
       body.appendChild(row);
@@ -1430,7 +1430,7 @@ function renderWeek(container) {
       if(endTotal<=startTotal) endTotal+=24;
       const top=startTotal*48;
       const h=Math.max(Math.min(endTotal,24)-startTotal,0.5)*48;
-      const color=isFriend?ev._friendColor:(CAT[ev.category]||CAT.other).color;
+      const color=isFriend?ev._friendColor:(CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
       const e=el('div','wk-ev');
       e.style.cssText=`top:${top}px;height:${h}px;background:${color}`;
       const timeSpan=el('span','ev-time'); timeSpan.textContent=ev.startTime+(ev.endTime?' – '+ev.endTime:'');
@@ -1485,7 +1485,7 @@ function renderAgenda(container) {
     } else {
       evs.forEach(ev=>{
         const isFriend=!!ev._friendId;
-        const color=isFriend?ev._friendColor:(CAT[ev.category]||CAT.other).color;
+        const color=isFriend?ev._friendColor:(CAT[ev.category]||{color:ev._catColor||CAT.other.color}).color;
         const row=el('div','ag-ev');
         const bar=el('div','ag-bar'); bar.style.background=color;
         const info=el('div','ag-info');
@@ -1498,7 +1498,7 @@ function renderAgenda(container) {
         if(ev.notes){const n=el('div','ag-notes');n.textContent=ev.notes;info.appendChild(n);}
         const badge=el('div','ag-badge');
         badge.style.cssText=`background:${color}22;color:${color}`;
-        badge.textContent=isFriend?ev._friendName:(CAT[ev.category]||CAT.other).label;
+        badge.textContent=isFriend?ev._friendName:(CAT[ev.category]||{label:ev.category||'Other'}).label;
         row.appendChild(bar); row.appendChild(info); row.appendChild(badge);
         if(isFriend){ row.style.opacity='0.85'; } else { row.addEventListener('click',()=>openEventForm(ev.id)); }
         grp.appendChild(row);
@@ -1678,6 +1678,7 @@ document.getElementById('f-save').addEventListener('click',()=>{
     reminder: reminderType==='none'?null:reminderType,
     private:  document.getElementById('f-private').checked||false,
   };
+  ev._catColor=(CAT[ev.category]||CAT.other).color;
   if(editingId){
     const i=events.findIndex(e=>e.id===editingId); if(i!==-1) events[i]=ev;
     if(repeatType!=='none'){
