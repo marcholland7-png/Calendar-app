@@ -3526,7 +3526,7 @@ document.getElementById('ics-add-cancel-btn').addEventListener('click',()=>{
 document.getElementById('ics-add-confirm-btn').addEventListener('click',async()=>{
   const rows=[...document.getElementById('ics-rows').children];
   const entries=rows.map(row=>{
-    const [colorInp,,nameInp,,urlInp]=row.querySelectorAll('input');
+    const [colorInp,nameInp,urlInp]=row.querySelectorAll('input');
     return {
       name:(nameInp?.value||'').trim(),
       url:(urlInp?.value||'').trim().replace(/^webcal:\/\//,'https://'),
