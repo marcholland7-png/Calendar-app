@@ -858,6 +858,29 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
       <div class="sync-status" id="sync-status-lbl">● Not connected</div>
       <button class="btn btn-ghost" id="settings-sync-btn" style="width:100%;margin-top:10px">Set Up Sync</button>
     </div>
+    <div class="settings-section" id="friends-section">
+      <h3>Friend Calendars</h3>
+      <div id="friends-list"></div>
+      <div id="add-friend-form" style="display:none;margin-top:12px">
+        <div class="fg">
+          <label>Friend's Name</label>
+          <input type="text" id="friend-name-inp" placeholder="e.g. Alex" autocomplete="off">
+        </div>
+        <div class="fg">
+          <label>Their Sync Code</label>
+          <input type="text" id="friend-code-inp" placeholder="Paste their sync code" autocomplete="off" style="font-family:monospace;font-size:.8rem">
+        </div>
+        <div class="fg">
+          <label>Colour</label>
+          <div id="friend-color-picker" style="display:flex;gap:8px;margin-top:6px"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-primary" id="friend-add-confirm-btn" style="flex:1">Add</button>
+          <button class="btn btn-ghost" id="friend-add-cancel-btn" style="flex:1">Cancel</button>
+        </div>
+      </div>
+      <button class="btn btn-ghost" id="friend-add-btn" style="width:100%;margin-top:10px">+ Add Friend Calendar</button>
+    </div>
     <div class="settings-section">
       <h3>Wallpaper</h3>
       <button class="btn btn-ghost" id="wallpaper-btn" style="width:100%;margin-bottom:8px">Set Wallpaper Photo</button>
@@ -997,9 +1020,14 @@ const CAT = {
 let events   = JSON.parse(localStorage.getItem(STORAGE_KEY)  || '[]');
 let settings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
 let todos    = JSON.parse(localStorage.getItem('mycal_todos_v1') || '[]');
+const FRIENDS_KEY = 'mycal_friends_v1';
+let friends  = JSON.parse(localStorage.getItem(FRIENDS_KEY) || '[]');
+let friendEvents = {}; // keyed by friend id → events array
+const FRIEND_COLORS = ['#ff7043','#7c4dff','#00bcd4','#ff4081','#26c6da','#ffa726'];
 function saveEvents()   { localStorage.setItem(STORAGE_KEY,   JSON.stringify(events)); pushSync().catch(()=>{}); }
 function saveSettings() { localStorage.setItem(SETTINGS_KEY,  JSON.stringify(settings)); }
 function saveTodos()    { localStorage.setItem('mycal_todos_v1', JSON.stringify(todos)); pushSync().catch(()=>{}); }
+function saveFriends()  { localStorage.setItem(FRIENDS_KEY,   JSON.stringify(friends)); }
 function todosForDate(d){ return todos.filter(t=>t.date===fmt(d)); }
 
 // ━━━ State ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1166,11 +1194,12 @@ function renderMonth(container) {
     cell.addEventListener('pointercancel',()=>{ clearTimeout(pressTimer); pressTimer=null; });
     cell.addEventListener('contextmenu',e=>e.preventDefault());
     const dn=el('div','dn'); dn.textContent=d.getDate(); cell.appendChild(dn);
-    const evs=eventsForDate(d);
+    const evs=allEventsForDate(d);
     evs.slice(0,3).forEach(ev=>{
-      const c=CAT[ev.category]||CAT.other;
+      const isFriend=!!ev._friendId;
+      const color=isFriend?ev._friendColor:(CAT[ev.category]||CAT.other).color;
       const chip=el('div','chip chip-single');
-      chip.style.cssText=`background:${c.color}18;color:${c.color};border-left-color:${c.color}`;
+      chip.style.cssText=`background:${color}18;color:${color};border-left-color:${color}`;
       const txt=el('span','chip-txt');
       txt.textContent=ev.title;
       chip.appendChild(txt);
@@ -1179,16 +1208,26 @@ function renderMonth(container) {
         time.textContent=ev.startTime;
         chip.appendChild(time);
       }
-      chip.addEventListener('pointerdown',e=>{
-        e.stopPropagation();
-        if(e.pointerType==='touch') return;
-        _drag={evId:ev.id,chipEl:chip,startX:e.clientX,startY:e.clientY,ghost:null,active:false};
-      });
-      chip.addEventListener('touchstart',e=>{
-        e.stopPropagation();
-        const t=e.touches[0];
-        _drag={evId:ev.id,chipEl:chip,startX:t.clientX,startY:t.clientY,ghost:null,active:false};
-      },{passive:true});
+      if(isFriend){
+        const dot=el('span','');
+        dot.textContent=ev._friendName[0].toUpperCase();
+        dot.style.cssText=`background:${color};color:#fff;border-radius:50%;width:14px;height:14px;font-size:9px;line-height:14px;text-align:center;display:inline-block;margin-left:3px;flex-shrink:0`;
+        chip.appendChild(dot);
+        chip.addEventListener('pointerdown',e=>e.stopPropagation());
+        chip.addEventListener('touchstart',e=>e.stopPropagation(),{passive:true});
+        chip.addEventListener('click',e=>{e.stopPropagation();openDaySheet(d);});
+      } else {
+        chip.addEventListener('pointerdown',e=>{
+          e.stopPropagation();
+          if(e.pointerType==='touch') return;
+          _drag={evId:ev.id,chipEl:chip,startX:e.clientX,startY:e.clientY,ghost:null,active:false};
+        });
+        chip.addEventListener('touchstart',e=>{
+          e.stopPropagation();
+          const t=e.touches[0];
+          _drag={evId:ev.id,chipEl:chip,startX:t.clientX,startY:t.clientY,ghost:null,active:false};
+        },{passive:true});
+      }
       cell.appendChild(chip);
     });
     if(evs.length>3){
@@ -1213,7 +1252,7 @@ function rescheduleEvent(evId, newDate) {
 
 // ━━━ Day detail sheet ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function openDaySheet(d) {
-  const dateStr=fmt(d), evs=eventsForDate(d), isT=isSameDay(d,today);
+  const dateStr=fmt(d), evs=allEventsForDate(d), isT=isSameDay(d,today);
   document.getElementById('day-sheet-title').textContent=isT
     ?'Today — '+d.toLocaleString('default',{weekday:'long',month:'long',day:'numeric'})
     :d.toLocaleString('default',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
@@ -1222,9 +1261,10 @@ function openDaySheet(d) {
     body.innerHTML='<div class="empty" style="padding:30px 0"><div class="e-icon">📅</div><p>No events — tap below to add one</p></div>';
   } else {
     evs.forEach(ev=>{
-      const c=CAT[ev.category]||CAT.other;
-      const row=el('div','ag-ev'); row.style.cursor='pointer';
-      const bar=el('div','ag-bar'); bar.style.background=c.color;
+      const isFriend=!!ev._friendId;
+      const color=isFriend?ev._friendColor:(CAT[ev.category]||CAT.other).color;
+      const row=el('div','ag-ev'); row.style.cursor=isFriend?'default':'pointer';
+      const bar=el('div','ag-bar'); bar.style.background=color;
       const info=el('div','ag-info');
       const title=el('div','ag-title'); title.textContent=ev.title;
       const meta=el('div','ag-meta');
@@ -1234,10 +1274,10 @@ function openDaySheet(d) {
       info.appendChild(title); info.appendChild(meta);
       if(ev.notes){const n=el('div','ag-notes');n.textContent=ev.notes;info.appendChild(n);}
       const badge=el('div','ag-badge');
-      badge.style.cssText=`background:${c.color}22;color:${c.color}`;
-      badge.textContent=c.label;
+      badge.style.cssText=`background:${color}22;color:${color}`;
+      badge.textContent=isFriend?ev._friendName:(CAT[ev.category]||CAT.other).label;
       row.appendChild(bar); row.appendChild(info); row.appendChild(badge);
-      row.addEventListener('click',()=>{ closeSheet(); openEventForm(ev.id); });
+      if(!isFriend) row.addEventListener('click',()=>{ closeSheet(); openEventForm(ev.id); });
       body.appendChild(row);
     });
   }
@@ -1349,20 +1389,26 @@ function renderWeek(container) {
       s.addEventListener('click',()=>openEventForm(null,fmt(d),String(h).padStart(2,'0')+':00'));
       col.appendChild(s);
     }
-    eventsForDate(d).filter(ev=>!ev.allDay&&ev.startTime).forEach(ev=>{
+    allEventsForDate(d).filter(ev=>!ev.allDay&&ev.startTime).forEach(ev=>{
+      const isFriend=!!ev._friendId;
       const [sh,sm]=(ev.startTime||'00:00').split(':').map(Number);
       let [eh,em]=(ev.endTime||ev.startTime).split(':').map(Number);
       let startTotal=sh+sm/60, endTotal=eh+em/60;
-      if(endTotal<=startTotal) endTotal+=24; // overnight shift
+      if(endTotal<=startTotal) endTotal+=24;
       const top=startTotal*48;
-      const h=Math.max(Math.min(endTotal,24)-startTotal,0.5)*48; // cap at midnight
-      const c=CAT[ev.category]||CAT.other;
+      const h=Math.max(Math.min(endTotal,24)-startTotal,0.5)*48;
+      const color=isFriend?ev._friendColor:(CAT[ev.category]||CAT.other).color;
       const e=el('div','wk-ev');
-      e.style.cssText=`top:${top}px;height:${h}px;background:${c.color}`;
+      e.style.cssText=`top:${top}px;height:${h}px;background:${color}`;
       const timeSpan=el('span','ev-time'); timeSpan.textContent=ev.startTime+(ev.endTime?' – '+ev.endTime:'');
-      const titleSpan=el('span','ev-title'); titleSpan.textContent=ev.title;
+      const titleSpan=el('span','ev-title'); titleSpan.textContent=ev.title+(isFriend?` (${ev._friendName})`:'');
       e.appendChild(timeSpan); e.appendChild(titleSpan);
-      e.addEventListener('click',ev2=>{ev2.stopPropagation();openEventForm(ev.id);});
+      if(isFriend){
+        e.style.opacity='0.85';
+        e.addEventListener('click',ev2=>{ev2.stopPropagation();showToast(`${ev._friendName}: ${ev.title}`);});
+      } else {
+        e.addEventListener('click',ev2=>{ev2.stopPropagation();openEventForm(ev.id);});
+      }
       col.appendChild(e);
     });
     daysCont.appendChild(col);
@@ -1393,7 +1439,7 @@ function renderAgenda(container) {
   for(let i=0;i<7;i++){
     const d=new Date(weekStart); d.setDate(d.getDate()+i);
     const isT=isSameDay(d,today);
-    const evs=eventsForDate(d).sort((a,b)=>(a.startTime||'').localeCompare(b.startTime||''));
+    const evs=allEventsForDate(d).sort((a,b)=>(a.startTime||'').localeCompare(b.startTime||''));
     const grp=el('div','ag-grp');
     const dh=el('div','ag-date'+(isT?' today-hdr':''));
     dh.textContent=isT
@@ -1405,9 +1451,10 @@ function renderAgenda(container) {
       grp.appendChild(empty);
     } else {
       evs.forEach(ev=>{
-        const c=CAT[ev.category]||CAT.other;
+        const isFriend=!!ev._friendId;
+        const color=isFriend?ev._friendColor:(CAT[ev.category]||CAT.other).color;
         const row=el('div','ag-ev');
-        const bar=el('div','ag-bar'); bar.style.background=c.color;
+        const bar=el('div','ag-bar'); bar.style.background=color;
         const info=el('div','ag-info');
         const title=el('div','ag-title'); title.textContent=ev.title;
         const meta=el('div','ag-meta');
@@ -1417,10 +1464,10 @@ function renderAgenda(container) {
         info.appendChild(title); info.appendChild(meta);
         if(ev.notes){const n=el('div','ag-notes');n.textContent=ev.notes;info.appendChild(n);}
         const badge=el('div','ag-badge');
-        badge.style.cssText=`background:${c.color}22;color:${c.color}`;
-        badge.textContent=c.label;
+        badge.style.cssText=`background:${color}22;color:${color}`;
+        badge.textContent=isFriend?ev._friendName:(CAT[ev.category]||CAT.other).label;
         row.appendChild(bar); row.appendChild(info); row.appendChild(badge);
-        row.addEventListener('click',()=>openEventForm(ev.id));
+        if(isFriend){ row.style.opacity='0.85'; } else { row.addEventListener('click',()=>openEventForm(ev.id)); }
         grp.appendChild(row);
       });
     }
@@ -2862,6 +2909,42 @@ document.getElementById('sync-disconnect-btn').addEventListener('click',()=>{
   ['mycal_sync_url','mycal_sync_key','mycal_sync_code','mycal_sync_ts'].forEach(k=>localStorage.removeItem(k));
   updateSyncStatus(); closeSheet(); showToast('Disconnected');
 });
+
+// ━━━ Friend Calendars ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async function loadFriendEvents() {
+  if(!syncConnected()||!friends.length) return;
+  let changed=false;
+  for(const f of friends){
+    try{
+      const res=await fetch(syncUrl()+`/rest/v1/sync?code=eq.${encodeURIComponent(f.code)}`,{headers:syncHeaders()});
+      if(!res.ok) continue;
+      const rows=await res.json();
+      if(rows.length){
+        friendEvents[f.id]=(rows[0].events||[]).map(ev=>({...ev,_friendId:f.id,_friendName:f.name,_friendColor:f.color}));
+        changed=true;
+      }
+    }catch(e){}
+  }
+  if(changed) render();
+}
+
+function friendEventsForDate(d){
+  const all=[];
+  Object.values(friendEvents).forEach(evs=>{
+    evs.filter(ev=>eventSpansDate(ev,d)).forEach(ev=>all.push(ev));
+  });
+  return all.sort((a,b)=>(a.startTime||'00:00')>(b.startTime||'00:00')?1:-1);
+}
+
+function allEventsForDate(d){
+  const own=eventsForDate(d);
+  const fr=friendEventsForDate(d);
+  return [...own,...fr].sort((a,b)=>(a.startTime||'00:00')>(b.startTime||'00:00')?1:-1);
+}
+
+function friendChipColor(ev){
+  return ev._friendColor||'#999';
+}
 document.getElementById('sync-sheet-close').addEventListener('click',closeSheet);
 document.getElementById('settings-sync-btn').addEventListener('click',openSyncSheet);
 
@@ -2904,6 +2987,99 @@ document.getElementById('wallpaper-remove-btn').addEventListener('click',()=>{
   document.getElementById('wallpaper-remove-btn').style.display='none';
   showToast('Wallpaper removed');
 });
+
+// ━━━ Friend Calendars — Settings UI ━━━━━━━━━━━━━━━━━━━
+let selectedFriendColor = FRIEND_COLORS[0];
+
+function renderFriendsList(){
+  const list=document.getElementById('friends-list');
+  list.innerHTML='';
+  if(!friends.length){
+    const note=el('div','settings-note');
+    note.style.cssText='margin-bottom:8px;font-size:.82rem;color:var(--muted)';
+    note.textContent='Add a friend\'s sync code to see their events on your calendar.';
+    list.appendChild(note);
+    return;
+  }
+  friends.forEach(f=>{
+    const row=el('div','');
+    row.style.cssText='display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)';
+    const dot=el('span','');
+    dot.style.cssText=`width:14px;height:14px;border-radius:50%;background:${f.color};flex-shrink:0`;
+    const name=el('span',''); name.textContent=f.name; name.style.flex='1';
+    const removeBtn=el('button','btn btn-ghost');
+    removeBtn.textContent='Remove';
+    removeBtn.style.cssText='padding:4px 10px;font-size:.75rem';
+    removeBtn.addEventListener('click',()=>{
+      friends=friends.filter(x=>x.id!==f.id);
+      delete friendEvents[f.id];
+      saveFriends(); renderFriendsList(); render();
+      showToast(`${f.name} removed`);
+    });
+    row.appendChild(dot); row.appendChild(name); row.appendChild(removeBtn);
+    list.appendChild(row);
+  });
+}
+
+function buildColorPicker(){
+  const picker=document.getElementById('friend-color-picker');
+  picker.innerHTML='';
+  FRIEND_COLORS.forEach(c=>{
+    const swatch=el('div','');
+    swatch.style.cssText=`width:28px;height:28px;border-radius:50%;background:${c};cursor:pointer;border:3px solid transparent;transition:border-color .15s`;
+    if(c===selectedFriendColor) swatch.style.borderColor='var(--text)';
+    swatch.addEventListener('click',()=>{
+      selectedFriendColor=c;
+      picker.querySelectorAll('div').forEach(s=>s.style.borderColor='transparent');
+      swatch.style.borderColor='var(--text)';
+    });
+    picker.appendChild(swatch);
+  });
+}
+
+document.getElementById('friend-add-btn').addEventListener('click',()=>{
+  document.getElementById('add-friend-form').style.display='';
+  document.getElementById('friend-add-btn').style.display='none';
+  document.getElementById('friend-name-inp').value='';
+  document.getElementById('friend-code-inp').value='';
+  selectedFriendColor=FRIEND_COLORS[0];
+  buildColorPicker();
+  setTimeout(()=>document.getElementById('friend-name-inp').focus(),50);
+});
+
+document.getElementById('friend-add-cancel-btn').addEventListener('click',()=>{
+  document.getElementById('add-friend-form').style.display='none';
+  document.getElementById('friend-add-btn').style.display='';
+});
+
+document.getElementById('friend-add-confirm-btn').addEventListener('click',async()=>{
+  const name=document.getElementById('friend-name-inp').value.trim();
+  const code=document.getElementById('friend-code-inp').value.trim();
+  if(!name||!code){ showToast('Enter a name and sync code','error'); return; }
+  if(!syncConnected()){ showToast('Set up Cloud Sync first','error'); return; }
+  const btn=document.getElementById('friend-add-confirm-btn');
+  btn.textContent='Checking…'; btn.disabled=true;
+  try{
+    const res=await fetch(syncUrl()+`/rest/v1/sync?code=eq.${encodeURIComponent(code)}`,{headers:syncHeaders()});
+    if(!res.ok) throw new Error(res.status);
+    const rows=await res.json();
+    if(!rows.length){ showToast('Sync code not found','error'); btn.textContent='Add'; btn.disabled=false; return; }
+    const id=Date.now().toString(36);
+    const f={id,name,code,color:selectedFriendColor};
+    friends.push(f);
+    friendEvents[id]=(rows[0].events||[]).map(ev=>({...ev,_friendId:id,_friendName:name,_friendColor:selectedFriendColor}));
+    saveFriends();
+    document.getElementById('add-friend-form').style.display='none';
+    document.getElementById('friend-add-btn').style.display='';
+    renderFriendsList();
+    render();
+    showToast(`${name} added ✓`,'success');
+  }catch(e){ showToast('Could not connect','error'); }
+  btn.textContent='Add'; btn.disabled=false;
+});
+
+// Show friends list whenever settings sheet opens
+document.getElementById('settings-btn').addEventListener('click',renderFriendsList,{capture:true});
 
 // ━━━ Navigation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 document.getElementById('prev-btn').addEventListener('click',()=>{
@@ -2996,8 +3172,8 @@ if(events.length===0){
 }
 render();
 updateSyncStatus();
-pullSync().catch(()=>{});
-setInterval(()=>{ if(syncConnected()) pullSync().catch(()=>{}); scheduleReminders(); }, 60000);
+pullSync().catch(()=>{}).then(()=>loadFriendEvents().catch(()=>{}));
+setInterval(()=>{ if(syncConnected()){ pullSync().catch(()=>{}); loadFriendEvents().catch(()=>{}); } scheduleReminders(); }, 60000);
 </script>
 </body>
 </html>
