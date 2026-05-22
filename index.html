@@ -636,14 +636,7 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
     </div>
     <div class="fg">
       <label>Category</label>
-      <div class="cat-pills" id="cat-pills">
-        <div class="cat-pill sel" data-cat="work" style="background:var(--c-work);color:#fff">Work</div>
-        <div class="cat-pill" data-cat="personal" style="background:var(--c-personal);color:#fff">Personal</div>
-        <div class="cat-pill" data-cat="health" style="background:var(--c-health);color:#fff">Health</div>
-        <div class="cat-pill" data-cat="social" style="background:var(--c-social);color:#fff">Social</div>
-        <div class="cat-pill" data-cat="family" style="background:var(--c-family);color:#fff">Family</div>
-        <div class="cat-pill" data-cat="other" style="background:var(--c-other);color:#fff">Other</div>
-      </div>
+      <div class="cat-pills" id="cat-pills"></div>
     </div>
     <div class="fg-row">
       <div class="fg">
@@ -900,6 +893,26 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
       </div>
       <button class="btn btn-ghost" id="friend-add-btn" style="width:100%;margin-top:10px">+ Add Friend Calendar</button>
     </div>
+    <div class="settings-section" id="categories-section">
+      <h3>Categories</h3>
+      <div id="cats-list"></div>
+      <div id="add-cat-form" style="display:none;margin-top:12px">
+        <div class="fg">
+          <label>Name</label>
+          <input type="text" id="cat-name-inp" placeholder="e.g. Travel, Hobbies…" autocomplete="off" maxlength="20">
+        </div>
+        <div class="fg" style="display:flex;align-items:center;gap:12px">
+          <label style="margin:0;flex-shrink:0">Colour</label>
+          <input type="color" id="cat-color-inp" value="#ff7043" style="width:48px;height:36px;border:none;border-radius:8px;cursor:pointer;padding:2px;background:transparent">
+          <span id="cat-color-preview" style="flex:1;height:36px;border-radius:8px;background:#ff7043;transition:background .1s"></span>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-primary" id="cat-add-confirm-btn" style="flex:1">Add Category</button>
+          <button class="btn btn-ghost" id="cat-add-cancel-btn" style="flex:1">Cancel</button>
+        </div>
+      </div>
+      <button class="btn btn-ghost" id="cat-add-btn" style="width:100%;margin-top:10px">+ Add Category</button>
+    </div>
     <div class="settings-section">
       <h3>Wallpaper</h3>
       <button class="btn btn-ghost" id="wallpaper-btn" style="width:100%;margin-bottom:8px">Set Wallpaper Photo</button>
@@ -1018,7 +1031,7 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
 // ━━━ Config ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const STORAGE_KEY  = 'mycal_events_v3';
 const SETTINGS_KEY = 'mycal_settings_v1';
-const CAT = {
+const BASE_CAT = {
   work:     { color: '#42a5f5', label: 'Work' },
   personal: { color: '#66bb6a', label: 'Personal' },
   health:   { color: '#ef5350', label: 'Health' },
@@ -1026,6 +1039,15 @@ const CAT = {
   family:   { color: '#ffa726', label: 'Family' },
   other:    { color: '#78909c', label: 'Other' },
 };
+const CUSTOM_CATS_KEY = 'mycal_custom_cats_v1';
+let customCats = JSON.parse(localStorage.getItem(CUSTOM_CATS_KEY) || '[]');
+let CAT = {};
+function rebuildCAT(){
+  CAT = {...BASE_CAT};
+  customCats.forEach(c=>{ CAT[c.id]={color:c.color,label:c.label}; });
+}
+rebuildCAT();
+function saveCustomCats(){ localStorage.setItem(CUSTOM_CATS_KEY, JSON.stringify(customCats)); rebuildCAT(); }
 
 // ━━━ Data ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 let events   = JSON.parse(localStorage.getItem(STORAGE_KEY)  || '[]');
@@ -1504,7 +1526,7 @@ function openEventForm(id, prefDate, prefTime, prefill) {
   document.getElementById('f-loc').value     =p.location||'';
   document.getElementById('f-notes').value   =p.notes||'';
   document.getElementById('f-time-wrap').style.display=(p.allDay===false)?'':'none';
-  setCategory(p.category||'work');
+  renderCatPills(p.category||'work');
   // Reset repeat section
   repeatType='none'; repeatWeeks=2;
   document.querySelectorAll('#f-repeat-pills .repeat-pill').forEach((x,i)=>x.classList.toggle('sel',i===0));
@@ -1570,9 +1592,22 @@ document.getElementById('f-smart').addEventListener('keydown',e=>{
 });
 document.getElementById('f-smart-btn').addEventListener('click',parseSmartInput);
 
+function renderCatPills(selectedCat){
+  const container=document.getElementById('cat-pills');
+  container.innerHTML='';
+  Object.entries(CAT).forEach(([id,{color,label}])=>{
+    const p=document.createElement('div');
+    p.className='cat-pill'+(id===selectedCat?' sel':'');
+    p.dataset.cat=id;
+    p.style.cssText=`background:${color};color:#fff;border-color:${id===selectedCat?'#fff':'transparent'}`;
+    p.textContent=label;
+    container.appendChild(p);
+  });
+}
 function setCategory(cat) {
   document.querySelectorAll('.cat-pill').forEach(p=>{
     p.classList.toggle('sel',p.dataset.cat===cat);
+    p.style.borderColor=p.dataset.cat===cat?'#fff':'transparent';
   });
 }
 
@@ -3146,7 +3181,71 @@ document.getElementById('friend-add-confirm-btn').addEventListener('click',async
 });
 
 // Show friends list whenever settings sheet opens
-document.getElementById('settings-btn').addEventListener('click',renderFriendsList,{capture:true});
+document.getElementById('settings-btn').addEventListener('click',()=>{ renderFriendsList(); renderCatsList(); },{capture:true});
+
+// ━━━ Custom Categories — Settings UI ━━━━━━━━━━━━━━━━━━
+function renderCatsList(){
+  const list=document.getElementById('cats-list');
+  list.innerHTML='';
+  // Built-in (read-only)
+  const builtIn=Object.entries(BASE_CAT);
+  builtIn.forEach(([id,{color,label}])=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)';
+    row.innerHTML=`<span style="width:14px;height:14px;border-radius:50%;background:${color};flex-shrink:0;display:inline-block"></span><span style="flex:1;font-size:.9rem">${label}</span><span style="font-size:.75rem;opacity:.4">built-in</span>`;
+    list.appendChild(row);
+  });
+  // Custom
+  customCats.forEach(c=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)';
+    const dot=document.createElement('span');
+    dot.style.cssText=`width:14px;height:14px;border-radius:50%;background:${c.color};flex-shrink:0;display:inline-block`;
+    const name=document.createElement('span');
+    name.style.cssText='flex:1;font-size:.9rem';
+    name.textContent=c.label;
+    const del=document.createElement('button');
+    del.className='btn btn-ghost';
+    del.style.cssText='padding:2px 8px;font-size:.8rem;color:#ef5350';
+    del.textContent='✕';
+    del.addEventListener('click',()=>{
+      customCats=customCats.filter(x=>x.id!==c.id);
+      saveCustomCats();
+      renderCatsList();
+    });
+    row.appendChild(dot); row.appendChild(name); row.appendChild(del);
+    list.appendChild(row);
+  });
+  if(!customCats.length&&!builtIn.length) list.innerHTML='<div style="opacity:.5;font-size:.85rem;padding:6px 0">No custom categories yet</div>';
+}
+
+document.getElementById('cat-add-btn').addEventListener('click',()=>{
+  document.getElementById('add-cat-form').style.display='';
+  document.getElementById('cat-add-btn').style.display='none';
+  document.getElementById('cat-name-inp').value='';
+  document.getElementById('cat-color-inp').value='#ff7043';
+  document.getElementById('cat-color-preview').style.background='#ff7043';
+  document.getElementById('cat-name-inp').focus();
+});
+document.getElementById('cat-add-cancel-btn').addEventListener('click',()=>{
+  document.getElementById('add-cat-form').style.display='none';
+  document.getElementById('cat-add-btn').style.display='';
+});
+document.getElementById('cat-color-inp').addEventListener('input',function(){
+  document.getElementById('cat-color-preview').style.background=this.value;
+});
+document.getElementById('cat-add-confirm-btn').addEventListener('click',()=>{
+  const name=document.getElementById('cat-name-inp').value.trim();
+  if(!name){ document.getElementById('cat-name-inp').style.borderColor='#ef5350'; setTimeout(()=>document.getElementById('cat-name-inp').style.borderColor='',1500); return; }
+  const color=document.getElementById('cat-color-inp').value;
+  const id='custom_'+Date.now().toString(36);
+  customCats.push({id,label:name,color});
+  saveCustomCats();
+  document.getElementById('add-cat-form').style.display='none';
+  document.getElementById('cat-add-btn').style.display='';
+  renderCatsList();
+  showToast('Category added','success');
+});
 
 // ━━━ Navigation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 document.getElementById('prev-btn').addEventListener('click',()=>{
