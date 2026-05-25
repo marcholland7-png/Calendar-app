@@ -1,0 +1,11 @@
+{
+  "name": "Life OS",
+  "short_name": "Life OS",
+  "start_url": "./pa.html",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#0f1117",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
