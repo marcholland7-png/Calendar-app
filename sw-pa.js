@@ -1,4 +1,4 @@
-const CACHE = 'pa-app-v1';
+const CACHE = 'pa-app-v2';
 const STATIC = ['./manifest-pa.json', './icon.svg'];
 
 self.addEventListener('install', e => {
