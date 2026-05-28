@@ -395,6 +395,9 @@ body.has-wallpaper .ag-date{
 .shift-card-info{flex:1;min-width:0}
 .shift-card-title{font-size:.9rem;font-weight:600;color:var(--text)}
 .shift-card-detail{font-size:.78rem;color:var(--muted);margin-top:2px}
+.shift-card-date{margin-top:6px;background:var(--bg);border:1px solid var(--border);
+  border-radius:6px;color:var(--text);font-size:.8rem;padding:5px 7px;
+  font-family:inherit;max-width:100%}
 
 /* ── OCR error step ── */
 .ocr-error-card{
@@ -2196,6 +2199,25 @@ const DAY_LOOKUP = {
 const DAY_KEYS = Object.keys(DAY_LOOKUP).sort((a,b) => b.length - a.length);
 const DAY_RX   = new RegExp('\\b(' + DAY_KEYS.join('|') + ')\\b', 'i');
 
+// Month names (English + Dutch + common abbreviations) → 1-based month number.
+const MONTHS = {
+  jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12,
+  januari:1,februari:2,maart:3,april:4,mei:5,juni:6,juli:7,augustus:8,
+  september:9,oktober:10,november:11,december:12,mrt:3,okt:10,
+};
+const MONTH_KEYS = Object.keys(MONTHS).sort((a,b) => b.length - a.length);
+// Matches a month name with an optional trailing 4-digit year (e.g. "Juni" or "Juni 2026").
+const MONTH_RX   = new RegExp('\\b(' + MONTH_KEYS.join('|') + ')[a-z]*\\.?\\b(?:\\s+(20\\d{2}))?', 'i');
+
+// Picks the most likely year for a detected month with no year printed.
+// Schedules are for the near future, so if the month sits well in the past, assume next year.
+function inferScheduleYear(month0, now) {
+  let y = now.getFullYear();
+  const monthsDiff = (y - now.getFullYear()) * 12 + (month0 - now.getMonth());
+  if (monthsDiff < -1) y += 1;
+  return y;
+}
+
 // Parses voice transcript — fills date/time/category, leaves title blank for the user.
 function parseVoiceText(transcript) {
   // Normalize "p.m." / "a.m." → "pm" / "am" and collapse extra spaces
@@ -2326,12 +2348,6 @@ function parseOCRText(raw) {
   console.log('[Parse] Raw OCR input:\n' + text);
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   console.log(`[Parse] ${lines.length} non-empty lines`);
-
-  const MONTHS = {
-    jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12,
-    januari:1,februari:2,maart:3,april:4,mei:5,juni:6,juli:7,augustus:8,
-    september:9,oktober:10,november:11,december:12,mrt:3,okt:10,
-  };
 
   // ── Date detection ─────────────────────────────────────────────────────
   // Tries 6 patterns in order; first valid result wins.
@@ -2694,13 +2710,33 @@ function parseShiftSchedule(text) {
   const usedDayNums = new Set();
   const now = new Date();
 
+  // Walk the lines top-down and remember the most recent month header seen.
+  // Each line inherits the month/year of the header above it. This lets a
+  // "Juni" header anchor the day numbers below it to the right month — and
+  // correctly handles a schedule that spans two months (a "Juli" header later
+  // switches the context for the shifts beneath it).
+  const lineMonth = new Array(lines.length).fill(null);
+  let monthCtx = null;
+  for (let i = 0; i < lines.length; i++) {
+    // Treat a line as a month header only when it's mostly just the month name
+    // (so a stray month word inside a longer detail line doesn't hijack context).
+    const mm = lines[i].match(MONTH_RX);
+    if (mm && lines[i].replace(MONTH_RX, '').replace(/[^a-z0-9]/gi, '').length === 0) {
+      const month0 = MONTHS[mm[1].toLowerCase()] - 1;
+      const year   = mm[2] ? parseInt(mm[2]) : inferScheduleYear(month0, now);
+      monthCtx = { month0, year };
+      console.log(`[Schedule] Month header → ${month0 + 1}/${year} ("${lines[i]}")`);
+    }
+    lineMonth[i] = monthCtx;
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const timeM = lines[i].match(timeRx);
     if (!timeM) continue;
 
     const startTime = timeM[1];
     const endTime   = timeM[2];
-    let dayNum = null, shiftType = null, location = null;
+    let dayNum = null, shiftType = null, location = null, dayLineIdx = null;
 
     // Prefer lines after the time line (day number is usually on the next line),
     // then fall back to lines before.
@@ -2716,6 +2752,7 @@ function parseShiftSchedule(text) {
         const n = parseInt(numM[1]);
         if (n >= 1 && n <= 31 && !usedDayNums.has(n)) {
           dayNum = n;
+          dayLineIdx = idx;
           // Extract shift type and location from the rest of this line
           const rest = l.slice(numM[0].length).trim();
           const sepIdx = rest.search(/\s[-·]\s/);
@@ -2732,10 +2769,19 @@ function parseShiftSchedule(text) {
     if (!dayNum) continue;
     usedDayNums.add(dayNum);
 
-    let month = now.getMonth(), year = now.getFullYear();
-    const candidate = new Date(year, month, dayNum);
-    const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
-    if (candidate < yesterday) { month++; if (month > 11) { month = 0; year++; } }
+    let month, year;
+    const mc = dayLineIdx != null ? lineMonth[dayLineIdx] : (lineMonth[i] || monthCtx);
+    if (mc) {
+      // A month header was printed in the photo — trust it.
+      month = mc.month0; year = mc.year;
+    } else {
+      // No month header found — fall back to current month, rolling forward
+      // only if the day number has already passed.
+      month = now.getMonth(); year = now.getFullYear();
+      const candidate = new Date(year, month, dayNum);
+      const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+      if (candidate < yesterday) { month++; if (month > 11) { month = 0; year++; } }
+    }
     const dateStr = fmt(new Date(year, month, dayNum));
 
     if (shifts.some(s => s.date === dateStr && s.startTime === startTime)) continue;
@@ -2763,10 +2809,9 @@ function showScheduleSteps(shifts) {
   const list = document.getElementById('shifts-list');
   list.innerHTML = '';
   document.getElementById('shifts-intro-text').textContent =
-    shifts.length + ' shifts detected — select which to import';
+    shifts.length + ' shifts detected — check the dates, fix any if needed, then import';
 
   shifts.forEach((s, i) => {
-    const label = fmtShortDate(s.date);
     const time  = s.startTime + (s.endTime ? ' – ' + s.endTime : '');
     const card  = document.createElement('div');
     card.className = 'shift-card';
@@ -2774,8 +2819,9 @@ function showScheduleSteps(shifts) {
       '<input type="checkbox" class="shift-card-check" data-idx="' + i + '" checked>' +
       '<div class="shift-card-info">' +
         '<div class="shift-card-title">' + s.title + '</div>' +
-        '<div class="shift-card-detail">' + label + ' · ' + time +
+        '<div class="shift-card-detail">' + time +
           (s.location ? ' · ' + s.location : '') + '</div>' +
+        '<input type="date" class="shift-card-date" data-idx="' + i + '" value="' + s.date + '">' +
       '</div>';
     list.appendChild(card);
   });
@@ -2793,7 +2839,10 @@ document.getElementById('shifts-import-btn').addEventListener('click', () => {
   const checked = [...document.querySelectorAll('.shift-card-check:checked')];
   if (!checked.length) { showToast('Select at least one shift'); return; }
   checked.forEach(cb => {
-    const s = Object.assign({}, pendingShifts[parseInt(cb.dataset.idx)]);
+    const idx = parseInt(cb.dataset.idx);
+    const s = Object.assign({}, pendingShifts[idx]);
+    const dateInput = document.querySelector('.shift-card-date[data-idx="' + idx + '"]');
+    if (dateInput && dateInput.value) s.date = dateInput.value;
     s.id = Date.now().toString(36) + Math.random().toString(36).slice(2);
     events.push(s);
   });
