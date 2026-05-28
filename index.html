@@ -395,7 +395,8 @@ body.has-wallpaper .ag-date{
 .shift-card-info{flex:1;min-width:0}
 .shift-card-title{font-size:.9rem;font-weight:600;color:var(--text)}
 .shift-card-detail{font-size:.78rem;color:var(--muted);margin-top:2px}
-.shift-card-date{margin-top:6px;background:var(--bg);border:1px solid var(--border);
+.shift-card-edits{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap}
+.shift-card-date,.shift-card-cat{background:var(--bg);border:1px solid var(--border);
   border-radius:6px;color:var(--text);font-size:.8rem;padding:5px 7px;
   font-family:inherit;max-width:100%}
 
@@ -1939,14 +1940,17 @@ async function handlePhotoFile(file) {
     const text = await runOCR(processedDataUrl);
     const trimmed = text.trim();
 
-    // Multi-event detection: "day HH:MM-HH:MM & day HH:MM-HH:MM" (e.g. WhatsApp messages)
-    const multiEvents = parseMultiDayTimePattern(trimmed);
-    // Schedule parsing: shift rosters with 2+ time-range lines
+    // Schedule parsing: shift rosters with day NUMBERS + a month header.
+    // Checked first because it reads the real date (month + day number) from
+    // the photo. The day-name fallback below only guesses the upcoming weekday.
     const shifts = parseShiftSchedule(trimmed);
-    if (multiEvents.length >= 2) {
-      showScheduleSteps(multiEvents);
-    } else if (shifts.length >= 2) {
+    // Multi-event fallback: "day HH:MM-HH:MM" with no day numbers (e.g. a
+    // WhatsApp message like "Mon 9-5, Fri 9-5"). Resolves to the next weekday.
+    const multiEvents = parseMultiDayTimePattern(trimmed);
+    if (shifts.length >= 2) {
       showScheduleSteps(shifts);
+    } else if (multiEvents.length >= 2) {
+      showScheduleSteps(multiEvents);
     } else {
       // Single-event flow — parse then run Chrono correction pass
       document.getElementById('ocr-text-area').value = trimmed;
@@ -2730,6 +2734,23 @@ function parseShiftSchedule(text) {
     lineMonth[i] = monthCtx;
   }
 
+  // Pulls a 1–31 day number out of a line. Skips a leading day abbreviation
+  // ("DI 2" → 2) and never grabs a digit that belongs to a time ("19:00").
+  const dayAbbr = /^(?:ma|di|wo|do|vr|za|zo|mon|tue|wed|thu|fri|sat|sun)\.?\s+/i;
+  function dayFromLine(line) {
+    const m = line.replace(dayAbbr, '').match(/^(\d{1,2})(?![:\d])/);
+    if (!m) return null;
+    const n = parseInt(m[1]);
+    if (n < 1 || n > 31) return null;
+    return { num: n, rest: line.replace(dayAbbr, '').slice(m[0].length).trim() };
+  }
+  // Splits "Tot sluit · De Gracht Vast" into shift type + location.
+  function splitRest(rest) {
+    const sepIdx = rest.search(/\s[-·]\s/);
+    if (sepIdx !== -1) return { type: rest.slice(0, sepIdx).trim() || null, loc: rest.slice(sepIdx + 3).trim() || null };
+    return { type: rest || null, loc: null };
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const timeM = lines[i].match(timeRx);
     if (!timeM) continue;
@@ -2738,30 +2759,27 @@ function parseShiftSchedule(text) {
     const endTime   = timeM[2];
     let dayNum = null, shiftType = null, location = null, dayLineIdx = null;
 
-    // Prefer lines after the time line (day number is usually on the next line),
-    // then fall back to lines before.
-    const scanOrder = [1, 2, -1, -2];
-    for (const d of scanOrder) {
-      const idx = i + d;
-      if (idx < 0 || idx >= lines.length || dayNum) continue;
-      const l = lines[idx];
+    // The day number can sit on the time line itself (e.g. "DI 2 19:00-01:30
+    // Tot sluit"). Look before the time range first; shift type/location are
+    // then whatever follows the time range on that same line.
+    const tIdx = lines[i].indexOf(timeM[0]);
+    const inline = dayFromLine(lines[i].slice(0, tIdx));
+    if (inline && !usedDayNums.has(inline.num)) {
+      dayNum = inline.num; dayLineIdx = i;
+      const after = lines[i].slice(tIdx + timeM[0].length).trim();
+      if (after) { const r = splitRest(after); shiftType = r.type; location = r.loc; }
+    }
 
-      // Day number: line starts with 1–2 digits (1–31), not already claimed
-      const numM = l.match(/^(\d{1,2})(?:\s|$)/);
-      if (numM) {
-        const n = parseInt(numM[1]);
-        if (n >= 1 && n <= 31 && !usedDayNums.has(n)) {
-          dayNum = n;
-          dayLineIdx = idx;
-          // Extract shift type and location from the rest of this line
-          const rest = l.slice(numM[0].length).trim();
-          const sepIdx = rest.search(/\s[-·]\s/);
-          if (sepIdx !== -1) {
-            shiftType = rest.slice(0, sepIdx).trim() || null;
-            location  = rest.slice(sepIdx + 3).trim() || null;
-          } else if (rest) {
-            shiftType = rest;
-          }
+    // Otherwise the day number is on a neighbouring line. Prefer lines after
+    // the time line (the number usually follows), then fall back to before.
+    if (!dayNum) {
+      for (const d of [1, 2, -1, -2]) {
+        const idx = i + d;
+        if (idx < 0 || idx >= lines.length || dayNum) continue;
+        const info = dayFromLine(lines[idx]);
+        if (info && !usedDayNums.has(info.num)) {
+          dayNum = info.num; dayLineIdx = idx;
+          const r = splitRest(info.rest); shiftType = r.type; location = r.loc;
         }
       }
     }
@@ -2811,8 +2829,11 @@ function showScheduleSteps(shifts) {
   document.getElementById('shifts-intro-text').textContent =
     shifts.length + ' shifts detected — check the dates, fix any if needed, then import';
 
+  const CATS = [['work','Work'],['personal','Personal'],['health','Health'],['social','Social'],['family','Family'],['other','Other']];
   shifts.forEach((s, i) => {
     const time  = s.startTime + (s.endTime ? ' – ' + s.endTime : '');
+    const cat   = s.category || 'work';
+    const catOpts = CATS.map(([v,l]) => '<option value="'+v+'"'+(v===cat?' selected':'')+'>'+l+'</option>').join('');
     const card  = document.createElement('div');
     card.className = 'shift-card';
     card.innerHTML =
@@ -2821,7 +2842,10 @@ function showScheduleSteps(shifts) {
         '<div class="shift-card-title">' + s.title + '</div>' +
         '<div class="shift-card-detail">' + time +
           (s.location ? ' · ' + s.location : '') + '</div>' +
-        '<input type="date" class="shift-card-date" data-idx="' + i + '" value="' + s.date + '">' +
+        '<div class="shift-card-edits">' +
+          '<input type="date" class="shift-card-date" data-idx="' + i + '" value="' + s.date + '">' +
+          '<select class="shift-card-cat" data-idx="' + i + '">' + catOpts + '</select>' +
+        '</div>' +
       '</div>';
     list.appendChild(card);
   });
@@ -2842,7 +2866,9 @@ document.getElementById('shifts-import-btn').addEventListener('click', () => {
     const idx = parseInt(cb.dataset.idx);
     const s = Object.assign({}, pendingShifts[idx]);
     const dateInput = document.querySelector('.shift-card-date[data-idx="' + idx + '"]');
+    const catInput  = document.querySelector('.shift-card-cat[data-idx="' + idx + '"]');
     if (dateInput && dateInput.value) s.date = dateInput.value;
+    if (catInput && catInput.value)   s.category = catInput.value;
     s.id = Date.now().toString(36) + Math.random().toString(36).slice(2);
     events.push(s);
   });
