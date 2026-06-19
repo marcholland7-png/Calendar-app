@@ -934,6 +934,9 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
         </div>
       </div>
       <button class="btn btn-ghost" id="ics-add-btn" style="width:100%;margin-top:10px">+ Add Calendar Import</button>
+      <button class="btn btn-ghost" id="ics-file-btn" style="width:100%;margin-top:8px">📂 Open .ics file</button>
+      <input type="file" id="ics-file-input" accept=".ics,text/calendar" style="display:none">
+      <p class="settings-note" style="margin-top:8px">No link needed — pick an .ics file (e.g. from Cowork) and its events drop straight in as your own, fully editable.</p>
     </div>
     <div class="settings-section">
       <h3>Wallpaper</h3>
@@ -3628,6 +3631,39 @@ document.getElementById('ics-add-confirm-btn').addEventListener('click',async()=
   if(failed>0) showToast(`${entries.length-failed} imported, ${failed} failed — check those URLs`,'error');
   else showToast(`Imported ${total} events across ${entries.length} calendar${entries.length>1?'s':''}!`,'success');
 });
+// ━━━ Open .ics file directly (no URL / no hosting needed) ━━━━━━━━━━━━
+document.getElementById('ics-file-btn').addEventListener('click',()=>{
+  document.getElementById('ics-file-input').click();
+});
+document.getElementById('ics-file-input').addEventListener('change',function(){
+  const file=this.files&&this.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    try{
+      const raw=parseICS(String(reader.result||''));
+      const conv=icsToLocal(raw,'file','Imported','#42a5f5').map(ev=>{
+        const {_icsId,_icsName,_icsColor,...rest}=ev;
+        return {...rest, id:'imp_'+(ev.id||Date.now().toString(36)+Math.random().toString(36).slice(2,6))};
+      });
+      if(!conv.length){ showToast('No events found in that file','error'); this.value=''; return; }
+      const sig=e=>`${e.date}|${e.startTime||''}|${e.endTime||''}|${(e.title||'').trim().toLowerCase()}`;
+      const existing=new Set(events.map(sig));
+      let added=0,skipped=0;
+      conv.forEach(ev=>{ if(existing.has(sig(ev))){skipped++;} else {events.push(ev);existing.add(sig(ev));added++;} });
+      saveEvents(); render(); scheduleReminders();
+      if(added&&skipped) showToast(`Added ${added}, skipped ${skipped} duplicate${skipped>1?'s':''}`,'success');
+      else if(added)      showToast(`Imported ${added} event${added>1?'s':''}!`,'success');
+      else                showToast('All events already in your calendar','success');
+    }catch(err){
+      showToast('Could not read that file','error');
+    }
+    this.value='';
+  };
+  reader.onerror=()=>{ showToast('Could not read that file','error'); this.value=''; };
+  reader.readAsText(file);
+});
+
 document.getElementById('settings-btn').addEventListener('click',renderIcsFeedsList,{capture:true});
 
 // ━━━ Navigation ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
