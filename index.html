@@ -937,6 +937,14 @@ body.has-wallpaper .wk-todo-col,.has-wallpaper .wk-todo-gut{border-color:rgba(25
       <button class="btn btn-ghost" id="ics-file-btn" style="width:100%;margin-top:8px">📂 Open .ics file</button>
       <input type="file" id="ics-file-input" accept=".ics,text/calendar" style="display:none">
       <p class="settings-note" style="margin-top:8px">No link needed — pick an .ics file (e.g. from Cowork) and its events drop straight in as your own, fully editable.</p>
+      <button class="btn btn-ghost" id="ics-paste-btn" style="width:100%;margin-top:8px">📋 Paste .ics text</button>
+      <div id="ics-paste-form" style="display:none;margin-top:8px">
+        <textarea id="ics-paste-area" placeholder="Paste .ics calendar text here (BEGIN:VCALENDAR ... END:VCALENDAR)" style="width:100%;min-height:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:.75rem;font-family:monospace;resize:vertical"></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-primary" id="ics-paste-confirm-btn" style="flex:1">Import</button>
+          <button class="btn btn-ghost" id="ics-paste-cancel-btn" style="flex:1">Cancel</button>
+        </div>
+      </div>
     </div>
     <div class="settings-section">
       <h3>Wallpaper</h3>
@@ -3631,37 +3639,58 @@ document.getElementById('ics-add-confirm-btn').addEventListener('click',async()=
   if(failed>0) showToast(`${entries.length-failed} imported, ${failed} failed — check those URLs`,'error');
   else showToast(`Imported ${total} events across ${entries.length} calendar${entries.length>1?'s':''}!`,'success');
 });
-// ━━━ Open .ics file directly (no URL / no hosting needed) ━━━━━━━━━━━━
+// ━━━ Import .ics directly — shared helper (no URL / no hosting needed) ━━━
+function importIcsText(text){
+  try{
+    const raw=parseICS(String(text||''));
+    const conv=icsToLocal(raw,'file','Imported','#42a5f5').map(ev=>{
+      const {_icsId,_icsName,_icsColor,...rest}=ev;
+      return {...rest, id:'imp_'+(ev.id||Date.now().toString(36)+Math.random().toString(36).slice(2,6))};
+    });
+    if(!conv.length){ showToast('No events found','error'); return false; }
+    const sig=e=>`${e.date}|${e.startTime||''}|${e.endTime||''}|${(e.title||'').trim().toLowerCase()}`;
+    const existing=new Set(events.map(sig));
+    let added=0,skipped=0;
+    conv.forEach(ev=>{ if(existing.has(sig(ev))){skipped++;} else {events.push(ev);existing.add(sig(ev));added++;} });
+    saveEvents(); render(); scheduleReminders();
+    if(added&&skipped) showToast(`Added ${added}, skipped ${skipped} duplicate${skipped>1?'s':''}`,'success');
+    else if(added)      showToast(`Imported ${added} event${added>1?'s':''}!`,'success');
+    else                showToast('All events already in your calendar','success');
+    return true;
+  }catch(err){
+    showToast('Could not read that calendar data','error');
+    return false;
+  }
+}
 document.getElementById('ics-file-btn').addEventListener('click',()=>{
   document.getElementById('ics-file-input').click();
 });
 document.getElementById('ics-file-input').addEventListener('change',function(){
   const file=this.files&&this.files[0];
-  if(!file) return;
+  if(!file){ this.value=''; return; }
   const reader=new FileReader();
-  reader.onload=()=>{
-    try{
-      const raw=parseICS(String(reader.result||''));
-      const conv=icsToLocal(raw,'file','Imported','#42a5f5').map(ev=>{
-        const {_icsId,_icsName,_icsColor,...rest}=ev;
-        return {...rest, id:'imp_'+(ev.id||Date.now().toString(36)+Math.random().toString(36).slice(2,6))};
-      });
-      if(!conv.length){ showToast('No events found in that file','error'); this.value=''; return; }
-      const sig=e=>`${e.date}|${e.startTime||''}|${e.endTime||''}|${(e.title||'').trim().toLowerCase()}`;
-      const existing=new Set(events.map(sig));
-      let added=0,skipped=0;
-      conv.forEach(ev=>{ if(existing.has(sig(ev))){skipped++;} else {events.push(ev);existing.add(sig(ev));added++;} });
-      saveEvents(); render(); scheduleReminders();
-      if(added&&skipped) showToast(`Added ${added}, skipped ${skipped} duplicate${skipped>1?'s':''}`,'success');
-      else if(added)      showToast(`Imported ${added} event${added>1?'s':''}!`,'success');
-      else                showToast('All events already in your calendar','success');
-    }catch(err){
-      showToast('Could not read that file','error');
-    }
-    this.value='';
-  };
+  reader.onload=()=>{ importIcsText(reader.result); this.value=''; };
   reader.onerror=()=>{ showToast('Could not read that file','error'); this.value=''; };
   reader.readAsText(file);
+});
+document.getElementById('ics-paste-btn').addEventListener('click',()=>{
+  document.getElementById('ics-paste-form').style.display='';
+  document.getElementById('ics-paste-btn').style.display='none';
+  document.getElementById('ics-paste-area').focus();
+});
+document.getElementById('ics-paste-cancel-btn').addEventListener('click',()=>{
+  document.getElementById('ics-paste-form').style.display='none';
+  document.getElementById('ics-paste-btn').style.display='';
+  document.getElementById('ics-paste-area').value='';
+});
+document.getElementById('ics-paste-confirm-btn').addEventListener('click',()=>{
+  const txt=document.getElementById('ics-paste-area').value;
+  if(!txt.trim()){ showToast('Paste some .ics text first','error'); return; }
+  if(importIcsText(txt)){
+    document.getElementById('ics-paste-form').style.display='none';
+    document.getElementById('ics-paste-btn').style.display='';
+    document.getElementById('ics-paste-area').value='';
+  }
 });
 
 document.getElementById('settings-btn').addEventListener('click',renderIcsFeedsList,{capture:true});
