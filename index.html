@@ -1096,6 +1096,33 @@ function saveTodos()    { localStorage.setItem('mycal_todos_v1', JSON.stringify(
 function saveFriends()  { localStorage.setItem(FRIENDS_KEY,   JSON.stringify(friends)); }
 function todosForDate(d){ return todos.filter(t=>t.date===fmt(d)); }
 
+// Two-way sync bookkeeping.
+// Every event/todo carries an updatedAt so we can pick the newer version when
+// merging local and remote. Deletions are recorded as tombstones (id + at)
+// so a delete on one device removes the event on the other on its next pull.
+const TOMBSTONES_KEY = 'mycal_tombstones_v1';
+let tombstones = JSON.parse(localStorage.getItem(TOMBSTONES_KEY) || '[]');
+function saveTombstones(){ localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(tombstones)); }
+function nowIso(){ return new Date().toISOString(); }
+function stampEvent(ev){ ev.updatedAt = nowIso(); return ev; }
+function tombstoneIds(ids){
+  const t = nowIso();
+  ids.forEach(id => tombstones.push({ id, at: t }));
+  saveTombstones();
+}
+// One-time migration: legacy events/todos have no updatedAt. Stamp them now
+// so they don't lose every merge tiebreak against a freshly-stamped remote.
+(function migrateUpdatedAt(){
+  let dirty = false;
+  const t = nowIso();
+  events.forEach(e => { if(!e.updatedAt){ e.updatedAt = t; dirty = true; } });
+  todos.forEach(td => { if(!td.updatedAt){ td.updatedAt = t; dirty = true; } });
+  if(dirty){
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
+    localStorage.setItem('mycal_todos_v1', JSON.stringify(todos));
+  }
+})();
+
 // ━━━ State ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const today = new Date(); today.setHours(0,0,0,0);
 let cursor      = new Date();
@@ -1312,6 +1339,7 @@ function rescheduleEvent(evId, newDate) {
   const ev=events.find(e=>e.id===evId);
   if(!ev) return;
   ev.date=newDate;
+  stampEvent(ev);
   saveEvents();
   render();
   showToast('Event moved ✓');
@@ -1409,11 +1437,11 @@ function renderWeek(container) {
         const row=el('div','todo-item');
         const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=t.completed;
         cb.addEventListener('change',()=>{
-          t.completed=cb.checked; saveTodos(); renderTodos();
+          t.completed=cb.checked; t.updatedAt=nowIso(); saveTodos(); renderTodos();
         });
         const txt=el('span','todo-item-text'+(t.completed?' done':'')); txt.textContent=t.text;
         txt.addEventListener('dblclick',()=>{
-          todos=todos.filter(x=>x.id!==t.id); saveTodos(); renderTodos();
+          tombstoneIds([t.id]); todos=todos.filter(x=>x.id!==t.id); saveTodos(); renderTodos();
         });
         row.appendChild(cb); row.appendChild(txt); col.appendChild(row);
       });
@@ -1424,7 +1452,7 @@ function renderWeek(container) {
         col.appendChild(inp); inp.focus();
         const save=()=>{
           const v=inp.value.trim();
-          if(v) todos.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2),date:dateStr,text:v,completed:false});
+          if(v) todos.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2),date:dateStr,text:v,completed:false,updatedAt:nowIso()});
           saveTodos(); renderTodos();
         };
         inp.addEventListener('keydown',e=>{if(e.key==='Enter')save(); if(e.key==='Escape')renderTodos();});
@@ -1711,6 +1739,7 @@ document.getElementById('f-save').addEventListener('click',()=>{
     private:  document.getElementById('f-private').checked||false,
   };
   ev._catColor=(CAT[ev.category]||CAT.other).color;
+  stampEvent(ev);
   if(editingId){
     const i=events.findIndex(e=>e.id===editingId); if(i!==-1) events[i]=ev;
     if(repeatType!=='none'){
@@ -1773,12 +1802,15 @@ document.getElementById('f-delete').addEventListener('click',()=>{
   if(ev&&ev.recurringId){
     const count=events.filter(e=>e.recurringId===ev.recurringId).length;
     const all=confirm(`This is a repeating event (${count} total).\nOK = delete all in series\nCancel = delete only this one`);
-    events=all
-      ? events.filter(e=>e.recurringId!==ev.recurringId)
-      : events.filter(e=>e.id!==editingId);
+    const ids = all
+      ? events.filter(e=>e.recurringId===ev.recurringId).map(e=>e.id)
+      : [editingId];
+    tombstoneIds(ids);
+    events = events.filter(e => !ids.includes(e.id));
     showToast(all?`${count} events deleted`:'Event deleted');
   } else {
     if(!confirm('Delete this event?')) return;
+    tombstoneIds([editingId]);
     events=events.filter(e=>e.id!==editingId);
     showToast('Event deleted');
   }
@@ -2881,6 +2913,7 @@ document.getElementById('shifts-import-btn').addEventListener('click', () => {
     if (dateInput && dateInput.value) s.date = dateInput.value;
     if (catInput && catInput.value)   s.category = catInput.value;
     s.id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    stampEvent(s);
     events.push(s);
   });
   saveEvents(); render(); closeSheet();
@@ -2909,6 +2942,7 @@ document.getElementById('export-btn').addEventListener('click',()=>{
 });
 document.getElementById('clear-btn').addEventListener('click',()=>{
   if(confirm('Delete all events? This cannot be undone.')){
+    tombstoneIds(events.map(e=>e.id));
     events=[]; saveEvents(); closeSheet(); render();
     showToast('All events cleared');
   }
@@ -2932,38 +2966,103 @@ function syncHeaders(){
   };
 }
 
+// Coalesces overlapping pushes. If a save happens while a push is already
+// flying, mark dirty so one more push fires after the current one finishes —
+// otherwise rapid saves silently get dropped by the syncInProgress guard.
+let syncDirty = false;
 async function pushSync(){
-  if(!syncConnected()||syncInProgress) return;
-  syncInProgress=true;
+  if(!syncConnected()) return;
+  if(syncInProgress){ syncDirty = true; return; }
+  syncInProgress = true; syncDirty = false;
   try{
-    const ts=new Date().toISOString();
-    const res=await fetch(syncUrl()+'/rest/v1/sync',{
-      method:'POST', headers:syncHeaders(),
-      body:JSON.stringify({code:syncCode(),events:[...events.filter(e=>!e.private),...Object.values(icsCache).flat()],todos,updated_at:ts}),
+    const ts = nowIso();
+    const res = await fetch(syncUrl()+'/rest/v1/sync', {
+      method:'POST', headers: syncHeaders(),
+      body: JSON.stringify({
+        code: syncCode(),
+        events: [...events.filter(e=>!e.private), ...Object.values(icsCache).flat()],
+        todos,
+        tombstones,
+        updated_at: ts,
+      }),
     });
-    if(res.ok) localStorage.setItem('mycal_sync_ts',ts);
+    if(res.ok) localStorage.setItem('mycal_sync_ts', ts);
   }catch(e){}
-  syncInProgress=false;
+  syncInProgress = false;
+  if(syncDirty) pushSync().catch(()=>{});
+}
+
+// Merges two id-keyed lists, preferring the entry with the newer updatedAt.
+function mergeById(local, remote){
+  const map = new Map();
+  local.forEach(e => map.set(e.id, e));
+  remote.forEach(e => {
+    const p = map.get(e.id);
+    if (!p || (e.updatedAt||'') > (p.updatedAt||'')) map.set(e.id, e);
+  });
+  return [...map.values()];
+}
+// Merges tombstone lists (id + at), preferring the newer at.
+function mergeTombs(local, remote){
+  const map = new Map();
+  local.forEach(t => map.set(t.id, t));
+  remote.forEach(t => {
+    const p = map.get(t.id);
+    if (!p || (t.at||'') > (p.at||'')) map.set(t.id, t);
+  });
+  return [...map.values()];
+}
+// Drops any item whose id has a tombstone with a later timestamp.
+// An item re-created after a delete (updatedAt > tombstone.at) survives.
+function applyTombs(items, tombs){
+  const tMap = new Map(tombs.map(t => [t.id, t.at || '']));
+  return items.filter(e => {
+    const tAt = tMap.get(e.id);
+    return tAt === undefined || (e.updatedAt||'') > tAt;
+  });
 }
 
 async function pullSync(){
   if(!syncConnected()||syncInProgress) return false;
-  syncInProgress=true;
-  let pulled=false;
+  syncInProgress = true;
+  let pulled = false;
   try{
-    const res=await fetch(syncUrl()+`/rest/v1/sync?code=eq.${syncCode()}`,{headers:syncHeaders()});
-    if(!res.ok){syncInProgress=false;return false;}
-    const rows=await res.json();
-    if(rows.length&&rows[0].updated_at>syncTs()){
-      events=(rows[0].events||[]).filter(e=>!e._icsId);
-      todos=rows[0].todos||[];
-      localStorage.setItem(STORAGE_KEY,JSON.stringify(events));
-      localStorage.setItem('mycal_todos_v1',JSON.stringify(todos));
-      localStorage.setItem('mycal_sync_ts',rows[0].updated_at);
-      render(); pulled=true;
+    const res = await fetch(syncUrl()+`/rest/v1/sync?code=eq.${syncCode()}`, { headers: syncHeaders() });
+    if(!res.ok){ syncInProgress=false; return false; }
+    const rows = await res.json();
+    if(rows.length){
+      const remote = rows[0];
+      const remoteEvents = (remote.events||[]).filter(e=>!e._icsId);
+      const remoteTodos  = remote.todos || [];
+      const remoteTombs  = remote.tombstones || [];
+
+      const mergedTombs  = mergeTombs(tombstones, remoteTombs);
+      const mergedEvents = applyTombs(mergeById(events, remoteEvents), mergedTombs);
+      const mergedTodos  = applyTombs(mergeById(todos,  remoteTodos),  mergedTombs);
+
+      const changed =
+        JSON.stringify(mergedEvents) !== JSON.stringify(events) ||
+        JSON.stringify(mergedTodos)  !== JSON.stringify(todos)  ||
+        JSON.stringify(mergedTombs)  !== JSON.stringify(tombstones);
+
+      if(changed){
+        events     = mergedEvents;
+        todos      = mergedTodos;
+        tombstones = mergedTombs;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
+        localStorage.setItem('mycal_todos_v1', JSON.stringify(todos));
+        localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(tombstones));
+        render();
+        pulled = true;
+      }
+      localStorage.setItem('mycal_sync_ts', remote.updated_at || nowIso());
     }
   }catch(e){}
-  syncInProgress=false;
+  syncInProgress = false;
+  // Push if we absorbed remote changes (so the remote row reflects the union)
+  // OR if a save happened during the pull (its pushSync was deferred by the
+  // syncInProgress guard and only marked syncDirty).
+  if(pulled || syncDirty) pushSync().catch(()=>{});
   return pulled;
 }
 
@@ -3022,13 +3121,23 @@ document.getElementById('sync-connect-btn').addEventListener('click',async()=>{
     if(syncMode==='existing'){
       const rows=await res.json();
       if(rows.length){
-        events=(rows[0].events||[]).filter(e=>!e._icsId);
-        todos=rows[0].todos||[];
-        localStorage.setItem(STORAGE_KEY,JSON.stringify(events));
-        localStorage.setItem('mycal_todos_v1',JSON.stringify(todos));
-        localStorage.setItem('mycal_sync_ts',rows[0].updated_at);
+        // Merge remote with this device's existing events instead of replacing —
+        // otherwise anything already on this device would be wiped when joining.
+        const remote = rows[0];
+        const remoteEvents = (remote.events||[]).filter(e=>!e._icsId);
+        const remoteTodos  = remote.todos || [];
+        const remoteTombs  = remote.tombstones || [];
+        tombstones = mergeTombs(tombstones, remoteTombs);
+        events     = applyTombs(mergeById(events, remoteEvents), tombstones);
+        todos      = applyTombs(mergeById(todos,  remoteTodos),  tombstones);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
+        localStorage.setItem('mycal_todos_v1', JSON.stringify(todos));
+        localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(tombstones));
+        localStorage.setItem('mycal_sync_ts', remote.updated_at || nowIso());
         render();
       }
+      // Push the merged union back so the remote reflects both sides.
+      await pushSync().catch(()=>{});
       updateSyncStatus(); closeSheet();
       showToast('Connected & synced ✓','success');
     } else {
@@ -3651,7 +3760,7 @@ function importIcsText(text){
     const sig=e=>`${e.date}|${e.startTime||''}|${e.endTime||''}|${(e.title||'').trim().toLowerCase()}`;
     const existing=new Set(events.map(sig));
     let added=0,skipped=0;
-    conv.forEach(ev=>{ if(existing.has(sig(ev))){skipped++;} else {events.push(ev);existing.add(sig(ev));added++;} });
+    conv.forEach(ev=>{ if(existing.has(sig(ev))){skipped++;} else {stampEvent(ev);events.push(ev);existing.add(sig(ev));added++;} });
     saveEvents(); render(); scheduleReminders();
     if(added&&skipped) showToast(`Added ${added}, skipped ${skipped} duplicate${skipped>1?'s':''}`,'success');
     else if(added)      showToast(`Imported ${added} event${added>1?'s':''}!`,'success');
@@ -3775,13 +3884,13 @@ if ('serviceWorker' in navigator) {
 
 // ━━━ Seed & init ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if(events.length===0){
-  events.push({
+  events.push(stampEvent({
     id:'welcome',title:'Welcome! Tap to edit or delete',
     date:fmt(today),endDate:null,allDay:true,
     startTime:null,endTime:null,location:null,
     notes:'Tap + to add events. Try Voice 🎙️ or Photo 📷 to add hands-free.',
     category:'personal',
-  });
+  }));
   saveEvents();
 }
 render();
